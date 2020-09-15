@@ -535,9 +535,9 @@ def show_2d_heatmap(idf, figsize=None, save_to=None, dpi=300, **kwargs):
 def plot_metrics_map(metrics_map, max_value=None, extent_coords=None, title=None, figsize=None,
                      save_dir=None, pad=False):
     """plot metrics map"""
-    colors = ((0.0, 0.6, 0.0), (.66, 1, 0), (0.9, 0.0, 0.0))
+    colors = ((0.0, 0.6, 0.0), (.66, .66, 0), (.33, .33, 0), (0.9, 0.0, 0.0))
 
-    metrics_map = np.nan_to_num(metrics_map, nan=0)
+    #metrics_map = np.nan_to_num(metrics_map, nan=0)
     metrics_map = np.pad(metrics_map, pad_width=1) if pad else metrics_map
 
     max_value = max_value if max_value is not None else metrics_map.max()
@@ -548,7 +548,7 @@ def plot_metrics_map(metrics_map, max_value=None, extent_coords=None, title=None
 
     fig = plt.figure(figsize=figsize)
     im = plt.imshow(metrics_map, origin='lower', interpolation='nearest',
-                    vmin=np.min(metrics_map[metrics_map > 0]), cmap=cm,
+                    vmin=np.min(metrics_map[metrics_map > 0]), vmax=max_value, cmap=cm,
                     aspect='auto', extent=extent_coords)
 
     plt.title(title, fontsize=18)

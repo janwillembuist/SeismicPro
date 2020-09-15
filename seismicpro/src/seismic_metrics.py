@@ -1,6 +1,7 @@
 """File contains metircs for seismic processing."""
 import numpy as np
 from numba import njit, prange
+from scipy import stats
 
 from .plot_utils import plot_metrics_map
 
@@ -31,6 +32,40 @@ class SemblanceMetrics:
         semblance = getattr(batch, src)[pos]
         getattr(batch, dst)[pos] = np.max(np.std(semblance, axis=1))
         return batch
+
+class PM:
+    @staticmethod
+    @inbatch_parallel(init="_init_component", target="threads")
+    def velocity(batch, index, dst ,src_picking='picking', src_offset='offset'):
+        """some docs"""
+        pos = batch.get_pos(None, src_picking, index)
+        time = getattr(batch, src_picking)[pos]
+        offset = getattr(batch, src_offset)[pos]
+        mask = [time > 1]
+        time = time[mask]
+        offset = offset[mask]
+        getattr(batch, dst)[pos] = np.mean(offset / time)
+        return batch
+
+    @staticmethod
+    @inbatch_parallel(init="_init_component", target="f")
+    def linear_diff(batch, index, dst, src_raw='raw', src_picking='picking', src_offset='offset', src_gx='GroupX', src_gy='GroupY', src_sx='SourceX',
+                 src_sy='SourceY', src_source_elev='SourceElevation', src_group_elev='GroupElevation'):
+        """some docs"""
+        pos = batch.get_pos(None, src_picking, index)
+        raw = getattr(batch, src_raw)[pos]
+        time = getattr(batch, src_picking)[pos]
+        offset = getattr(batch, src_offset)[pos]
+        gx, gy, sx, sy = getattr(batch, src_gx)[pos], getattr(batch, src_gy)[pos], getattr(batch, src_sx)[pos], getattr(batch, src_sy)[pos]
+        s_elev, g_elev = getattr(batch, src_source_elev)[pos], getattr(batch, src_group_elev)[pos] 
+        offset_all = np.sqrt((gx - sx) ** 2 + (gy - sy) ** 2 + (s_elev - g_elev) ** 2)
+        slope, intercept  = stats.siegelslopes(time, offset)
+        values  = abs(offset * slope + intercept - time)
+        time_for_elev = abs((offset - offset_all) * slope)
+        getattr(batch, dst[0])[pos] = np.mean(values)
+        getattr(batch, dst[1])[pos] = np.mean(time_for_elev)
+        return batch
+    
 
 
 class MetricsMap(Metrics):
