@@ -54,12 +54,12 @@ class TraceIndex(DatasetIndex):
 
     def sort(self, by='offset'):
         df = self.get_df(reset=False)
-        df.sort_values([self.name, by], inplace=True)
+        df.sort_values([*self.name, by], inplace=True)
         self._idf = df
     
     def keep_first(self, slice):
         df = self.get_df(reset=False)
-        df = df.groupby(level=0)
+        df = df.groupby(level=len(self.name) - 1)
         df = df.apply( lambda _df : _df.iloc[slice])
         df.index = df.index.droplevel()
         self._idf = df
