@@ -395,7 +395,7 @@ class SeismicBatch(Batch):
     @apply_to_each_component
     def _load_from_index(self, src, dst):
         """Load picking from dataframe column."""
-        idf = self.index.get_df(reset=False)
+        idf = self.index.get_df()
         ind = np.cumsum(self.index.tracecounts)[:-1]
         dst_data = np.split(idf[src].values, ind)
         self.add_components(dst, init=np.array(dst_data + [None])[:-1])

@@ -37,7 +37,8 @@ class TraceIndex(DatasetIndex):
     def __init__(self, *args, index_name=None, **kwargs):
         self.meta = {}
         self._idf = pd.DataFrame()
-        self._idf.index.name = index_name
+        #self._idf.index.name = index_name
+        self._name = index_name
         super().__init__(*args, **kwargs)
 
     @property
@@ -48,7 +49,20 @@ class TraceIndex(DatasetIndex):
     @property
     def name(self):
         """Return a name of current index column."""
-        return self._idf.index.name
+        #return self._idf.index.name
+        return self._name
+
+    def sort(self, by='offset'):
+        df = self.get_df(reset=False)
+        df.sort_values([self.name, by], inplace=True)
+        self._idf = df
+    
+    def keep_first(self, slice):
+        df = self.get_df(reset=False)
+        df = df.groupby(level=0)
+        df = df.apply( lambda _df : _df.iloc[slice])
+        df.index = df.index.droplevel()
+        self._idf = df
 
     def get_df(self, index=None, reset=True):
         """Return index DataFrame.
@@ -230,7 +244,6 @@ class TraceIndex(DatasetIndex):
         df.reset_index(drop=df.index.name is None, inplace=True)
         if self.name is not None:
             df.set_index(self.name, inplace=True)
-
         self._idf = df.sort_index()
         return self._idf.index.unique()
 
@@ -300,12 +313,14 @@ class CustomIndex(TraceIndex):
     """
     def __init__(self, *args, **kwargs):
         index_name = kwargs['index_name']
+        if isinstance(index_name, str):
+            index_name = [index_name]
         if index_name is not None:
             extra_headers = kwargs.get('extra_headers', [])
             if extra_headers == 'all':
                 extra_headers = [h.__str__() for h in segyio.TraceField.enums()]
 
-            kwargs['extra_headers'] = list(set(extra_headers + [index_name]))
+            kwargs['extra_headers'] = list(set(extra_headers + index_name))
         super().__init__(*args, **kwargs)
 
 
