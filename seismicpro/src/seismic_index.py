@@ -36,7 +36,7 @@ class TraceIndex(DatasetIndex):
         a number of extra_headers for index built from SEGY files or FieldRecord, TraceNumber and
         extra SPS file columns for index built from SPS files.
     """
-    def __init__(self, *args, index_name=('TRACE_SEQUENCE_FILE', 'raw'), **kwargs):
+    def __init__(self, *args, index_name='TRACE_SEQUENCE_FILE', **kwargs):
         self.meta = {}
         self._idf = pd.DataFrame()
     
