@@ -1,5 +1,7 @@
 """Index for SeismicBatch."""
 import warnings
+from collections.abc import Iterable
+
 import numpy as np
 import pandas as pd
 from sklearn.neighbors import NearestNeighbors
@@ -34,10 +36,20 @@ class TraceIndex(DatasetIndex):
         a number of extra_headers for index built from SEGY files or FieldRecord, TraceNumber and
         extra SPS file columns for index built from SPS files.
     """
-    def __init__(self, *args, index_name=None, **kwargs):
+    def __init__(self, *args, index_name=('TRACE_SEQUENCE_FILE', 'raw'), **kwargs):
         self.meta = {}
         self._idf = pd.DataFrame()
-        #self._idf.index.name = index_name
+    
+        traces_name = kwargs.get('name', 'raw')
+
+        if index_name == 'TRACE_SEQUENCE_FILE':
+            index_name = [(index_name, traces_name), ('file_id', traces_name)]
+        elif isinstance(index_name, list):
+            index_name = [*index_name, ('file_id', traces_name)]
+        elif isinstance(index_name, tuple):
+            index_name = [index_name, ('file_id', traces_name)]
+        elif index_name is None:
+            index_name = ('file_id', traces_name)
         self._name = index_name
         super().__init__(*args, **kwargs)
 
@@ -49,19 +61,37 @@ class TraceIndex(DatasetIndex):
     @property
     def name(self):
         """Return a name of current index column."""
-        #return self._idf.index.name
         return self._name
+
+    def get_pos(self, index):
+        if isinstance(index, slice):
+            start = self._pos[index.start] if index.start is not None else None
+            stop = self._pos[index.stop] if index.stop is not None else None
+            pos = slice(start, stop, index.step)
+        elif isinstance(index, str):
+            pos = self._pos[index]
+        elif isinstance(index, Iterable) and isinstance(index[0], Iterable):
+            pos = np.asarray([self._pos[ix] for ix in index])
+        elif isinstance(index, Iterable) and not isinstance(index[0], (tuple, list)):
+            if isinstance(self.indices[0], (list, tuple)):
+                pos = self._pos[index]
+            else: 
+             pos = np.asarray([self._pos[ix] for ix in index])
+        else:
+            pos = self._pos[index]
+        return pos
 
     def sort(self, by='offset'):
         df = self.get_df(reset=False)
-        df.sort_values([*self.name, by], inplace=True)
+        df.sort_values(by, inplace=True)
         self._idf = df
     
     def keep_first(self, slice):
         df = self.get_df(reset=False)
-        df = df.groupby(level=len(self.name) - 1)
+        levels = list(range(len(self.name)))
+        df = df.groupby(level=levels)
         df = df.apply( lambda _df : _df.iloc[slice])
-        df.index = df.index.droplevel()
+        df.index = df.index.droplevel(levels)
         self._idf = df
 
     def get_df(self, index=None, reset=True):
@@ -286,7 +316,7 @@ class SegyFilesIndex(TraceIndex):
         a number of extra_headers if specified.
     """
     def __init__(self, *args, **kwargs):
-        kwargs['index_name'] = ('file_id', kwargs.get('name'))
+        kwargs['index_name'] = None
         super().__init__(*args, **kwargs)
 
 
@@ -401,7 +431,7 @@ class FieldIndex(TraceIndex):
         built from SPS files.
     """
     def __init__(self, *args, **kwargs):
-        kwargs['index_name'] = 'FieldRecord'
+        kwargs['index_name'] = ['FieldRecord']
         super().__init__(*args, **kwargs)
 
 
