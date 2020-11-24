@@ -42,6 +42,8 @@ class TraceIndex(DatasetIndex):
     
         traces_name = kwargs.get('name', 'raw')
 
+        if isinstance(index_name, (tuple, list)) and ('file_id', traces_name) in index_name:
+            index_name = index_name[:-1]
         if index_name == 'TRACE_SEQUENCE_FILE':
             index_name = [(index_name, traces_name), ('file_id', traces_name)]
         elif isinstance(index_name, list):
@@ -64,6 +66,10 @@ class TraceIndex(DatasetIndex):
         return self._name
 
     def get_pos(self, index):
+
+        if len(index) == 1 and isinstance(index, tuple):
+            index = index[0]
+
         if isinstance(index, slice):
             start = self._pos[index.start] if index.start is not None else None
             stop = self._pos[index.stop] if index.stop is not None else None
@@ -76,7 +82,7 @@ class TraceIndex(DatasetIndex):
             if isinstance(self.indices[0], (list, tuple)):
                 pos = self._pos[index]
             else: 
-             pos = np.asarray([self._pos[ix] for ix in index])
+                pos = np.asarray([self._pos[ix] for ix in index])
         else:
             pos = self._pos[index]
         return pos

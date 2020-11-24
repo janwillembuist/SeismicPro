@@ -264,7 +264,7 @@ class SeismicBatch(Batch):
             if fr_comp == t_comp:
                 continue
 
-            if self.meta[t_comp]:
+            if t_comp in self.meta:
                 warnings.warn("Meta of component {} is not empty and".format(t_comp) + \
                               " will be replaced by the meta from component {}.".format(fr_comp),
                               UserWarning)
@@ -367,13 +367,14 @@ class SeismicBatch(Batch):
         self.add_components(dst, init=res)
         return self
 
-    @inbatch_parallel(init="_init_component", target="threads")
-    def _load_from_segy_file(self, index, *args, src, dst, tslice=None):
+    @inbatch_parallel(init="_init_component", target="f")
+    def _load_from_segy_file(self, *index, src, dst, tslice=None):
         """Load from a single segy file."""
-        _ = src, args
+        _ = src
+        index = index[0]
         pos = self.index.get_pos(index)
         path = index
-        trace_seq = self.index.get_df([index])[(INDEX_UID, src)]
+        trace_seq = self.index.get_df(index)[(INDEX_UID, src)]
         if tslice is None:
             tslice = slice(None)
 
@@ -796,7 +797,7 @@ class SeismicBatch(Batch):
     @action
     @inbatch_parallel(init='_init_component')
     @apply_to_each_component
-    def equalize(self, index, src, dst, params, survey_id_col=None, upscale=False):
+    def equalize(self, *index, src, dst, params, survey_id_col=None, upscale=False):
         """ Equalize amplitudes of different seismic surveys in dataset.
 
         This method performs quantile normalization by shifting and
@@ -1317,7 +1318,7 @@ class SeismicBatch(Batch):
         self.meta[dst]['sorting'] = sort_by
         return self
 
-    @inbatch_parallel(init="_init_component", target="threads")
+    @inbatch_parallel(init="indices", target="f")
     def _sort(self, index, src, sort_by, current_sorting, dst=None):
         """Sort traces.
 
