@@ -6,6 +6,14 @@ from matplotlib import patches
 from .utils import measure_gain_amplitude
 
 
+
+def imshow_with_defaults(ax, arr, **kwargs):
+    """ """
+    kwargs.setdefault('cmap', 'gray')
+    kwargs.setdefault('vmax', np.quantile(arr, 0.9))
+    kwargs.setdefault('vmin', np.quantile(arr, 0.1))
+    ax.imshow(arr, **kwargs)
+
 def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-branches, too-many-arguments
                  pts=None, s=None, scatter_color=None, names=None, figsize=None,
                  save_to=None, dpi=None, line_color=None, title=None, **kwargs):
@@ -90,7 +98,7 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
                     ax[0, i].fill_betweenx(y, k, x, where=(x > k), color=col)
 
             else:
-                ax[0, i].imshow(arr.T, **kwargs)
+                imshow_with_defaults(ax[0, i], arr.T, **kwargs)
 
         elif arr.ndim == 1:
             ax[0, i].plot(arr, **kwargs)
@@ -115,13 +123,14 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
 
     if title is not None:
         fig.suptitle(title)
+
     if save_to is not None:
-        plt.savefig(save_to, dpi=dpi, transparent=True)
+        plt.savefig(save_to, dpi=dpi)
 
     plt.show()
 
 def spectrum_plot(arrs, frame, rate, max_freq=None, names=None,
-                  figsize=None, save_to=None, **kwargs):
+                  figsize=None, save_to=None, dpi=None, **kwargs):
     """Plot seismogram(s) and power spectrum of given region in the seismogram(s).
 
     Parameters
@@ -155,7 +164,7 @@ def spectrum_plot(arrs, frame, rate, max_freq=None, names=None,
 
     _, ax = plt.subplots(2, len(arrs), figsize=figsize, squeeze=False)
     for i, arr in enumerate(arrs):
-        ax[0, i].imshow(arr.T, **kwargs)
+        imshow_with_defaults(ax[0, i], arr.T, **kwargs)
         rect = patches.Rectangle((frame[0].start, frame[1].start),
                                  frame[0].stop - frame[0].start,
                                  frame[1].stop - frame[1].start,
@@ -177,11 +186,12 @@ def spectrum_plot(arrs, frame, rate, max_freq=None, names=None,
         ax[1, i].set_aspect('auto')
 
     if save_to is not None:
-        plt.savefig(save_to)
+        plt.savefig(save_to, dpi=dpi)
 
     plt.show()
 
-def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=None, names=None, **kwargs):# pylint: disable=too-many-branches
+def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=None, 
+              names=None, dpi=None, save_to=None, **kwargs):# pylint: disable=too-many-branches
     r"""Gain's graph plots the ratio of the maximum mean value of
     the amplitude to the mean value of the smoothed amplitude at the moment t.
 
@@ -247,10 +257,13 @@ def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=None, names=None, *
         ax[ix].set_xlim(set_xlim)
         ax[ix].set_xlabel('Maxamp/Amp')
         ax[ix].set_ylabel('Time')
+
+    if save_to is not None:
+        plt.savefig(save_to, dpi=dpi)
     plt.show()
 
 def statistics_plot(arrs, stats, rate=None, figsize=None, names=None,
-                    save_to=None, **kwargs):
+                    save_to=None, dpi=None, **kwargs):
     """Show seismograms and various trace statistics, e.g. rms amplitude and rms frequency.
 
     Parameters
@@ -309,11 +322,11 @@ def statistics_plot(arrs, stats, rate=None, figsize=None, names=None,
         ax[0, i].set_xlim([0, len(arr)])
         ax[0, i].set_aspect('auto')
         ax[0, i].set_title(names[i] if names is not None else '')
-        ax[1, i].imshow(arr.T, **kwargs)
+        imshow_with_defaults(ax[1, i], arr.T, **kwargs)
         ax[1, i].set_aspect('auto')
 
     if save_to is not None:
-        plt.savefig(save_to)
+        plt.savefig(save_to, dpi=dpi)
 
     plt.show()
 

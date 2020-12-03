@@ -1502,7 +1502,7 @@ class SeismicBatch(Batch):
     #-------------------------------------------------------------------------#
 
     def seismic_plot(self, src, index, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-arguments
-                     src_picking=None, s=None, scatter_color=None, figsize=None,
+                     src_picking=None, s=None, scatter_color=None, figsize=(10, 7),
                      save_to=None, dpi=None, line_color=None, title=None, **kwargs):
         """Plot seismic traces.
 
@@ -1635,7 +1635,7 @@ class SeismicBatch(Batch):
         return self
 
     def gain_plot(self, src, index, window=51, xlim=None, ylim=None,
-                  figsize=None, names=None, **kwargs):
+                  figsize=(10, 7), names=None,  save_to=None, dpi=300, **kwargs):
         """Gain's graph plots the ratio of the maximum mean value of
         the amplitude to the mean value of the amplitude at the moment t.
 
@@ -1664,7 +1664,7 @@ class SeismicBatch(Batch):
         return self
 
     def spectrum_plot(self, src, index, frame, max_freq=None,
-                      figsize=None, save_to=None, **kwargs):
+                      figsize=(10, 10), save_to=None, dpi=300, **kwargs):
         """Plot seismogram(s) and power spectrum of given region in the seismogram(s).
 
         Parameters
@@ -1699,7 +1699,8 @@ class SeismicBatch(Batch):
                       names=names, figsize=figsize, save_to=save_to, **kwargs)
         return self
 
-    def statistics_plot(self, src, index, stats, figsize=None, save_to=None, **kwargs):
+    def statistics_plot(self, src, index, stats, figsize=(10, 10), 
+                        save_to=None, dpi=300, **kwargs):
         """Plot seismogram(s) and various trace statistics.
 
         Parameters
