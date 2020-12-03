@@ -6,13 +6,16 @@ from matplotlib import patches
 from .utils import measure_gain_amplitude
 
 
+def imshow_set_defaults(ax, arr, **kwargs):
+    """ Calls ax.imshow(arr) with some set of arguments being fixed """
 
-def imshow_with_defaults(ax, arr, **kwargs):
-    """ """
-    kwargs.setdefault('cmap', 'gray')
-    kwargs.setdefault('vmax', np.quantile(arr, 0.9))
-    kwargs.setdefault('vmin', np.quantile(arr, 0.1))
-    ax.imshow(arr, **kwargs)
+    seismic_defaults = {
+        'cmap': 'gray',
+        'vmin': np.np.quantile(arr, 0.1),
+        'max': np.np.quantile(arr, 0.9),
+    }
+    ax.imshow(arr, aspect='auto', **{**seismic_defaults, **kwargs})
+
 
 def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-branches, too-many-arguments
                  pts=None, s=None, scatter_color=None, names=None, figsize=None,
@@ -98,7 +101,7 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
                     ax[0, i].fill_betweenx(y, k, x, where=(x > k), color=col)
 
             else:
-                imshow_with_defaults(ax[0, i], arr.T, **kwargs)
+                imshow_set_defaults(ax[0, i], arr.T, **kwargs)
 
         elif arr.ndim == 1:
             ax[0, i].plot(arr, **kwargs)
@@ -118,8 +121,6 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
 
         if pts is not None:
             ax[0, i].scatter(*pts, s=s, c=scatter_color)
-
-        ax[0, i].set_aspect('auto')
 
     if title is not None:
         fig.suptitle(title)
@@ -164,7 +165,7 @@ def spectrum_plot(arrs, frame, rate, max_freq=None, names=None,
 
     _, ax = plt.subplots(2, len(arrs), figsize=figsize, squeeze=False)
     for i, arr in enumerate(arrs):
-        imshow_with_defaults(ax[0, i], arr.T, **kwargs)
+        imshow_set_defaults(ax[0, i], arr.T, **kwargs)
         rect = patches.Rectangle((frame[0].start, frame[1].start),
                                  frame[0].stop - frame[0].start,
                                  frame[1].stop - frame[1].start,
@@ -181,9 +182,7 @@ def spectrum_plot(arrs, frame, rate, max_freq=None, names=None,
         mask = freqs <= max_freq
         ax[1, i].plot(freqs[mask], np.mean(spec, axis=0)[mask], lw=2)
         ax[1, i].set_xlabel('Hz')
-        ax[1, i].set_title('Spectrum plot {}'.format(names[i] if names
-                                                     is not None else ''))
-        ax[1, i].set_aspect('auto')
+        ax[1, i].set_title('Spectrum plot {}'.format(names[i] if names is not None else ''))
 
     if save_to is not None:
         plt.savefig(save_to, dpi=dpi)
@@ -260,6 +259,7 @@ def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=None,
 
     if save_to is not None:
         plt.savefig(save_to, dpi=dpi)
+
     plt.show()
 
 def statistics_plot(arrs, stats, rate=None, figsize=None, names=None,
@@ -322,8 +322,7 @@ def statistics_plot(arrs, stats, rate=None, figsize=None, names=None,
         ax[0, i].set_xlim([0, len(arr)])
         ax[0, i].set_aspect('auto')
         ax[0, i].set_title(names[i] if names is not None else '')
-        imshow_with_defaults(ax[1, i], arr.T, **kwargs)
-        ax[1, i].set_aspect('auto')
+        imshow_set_defaults(ax[1, i], arr.T, **kwargs)
 
     if save_to is not None:
         plt.savefig(save_to, dpi=dpi)

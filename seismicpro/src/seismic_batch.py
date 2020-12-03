@@ -1503,7 +1503,7 @@ class SeismicBatch(Batch):
 
     def seismic_plot(self, src, index, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-arguments
                      src_picking=None, s=None, scatter_color=None, figsize=(10, 7),
-                     save_to=None, dpi=None, line_color=None, title=None, **kwargs):
+                     line_color=None, title=None, save_to=None, dpi=None, **kwargs):
         """Plot seismic traces.
 
         Parameters
@@ -1635,7 +1635,7 @@ class SeismicBatch(Batch):
         return self
 
     def gain_plot(self, src, index, window=51, xlim=None, ylim=None,
-                  figsize=(10, 7), names=None,  save_to=None, dpi=300, **kwargs):
+                  figsize=(10, 7), names=None,  save_to=None, dpi=None, **kwargs):
         """Gain's graph plots the ratio of the maximum mean value of
         the amplitude to the mean value of the amplitude at the moment t.
 
@@ -1664,7 +1664,7 @@ class SeismicBatch(Batch):
         return self
 
     def spectrum_plot(self, src, index, frame, max_freq=None,
-                      figsize=(10, 10), save_to=None, dpi=300, **kwargs):
+                      figsize=(10, 10), save_to=None, dpi=None, **kwargs):
         """Plot seismogram(s) and power spectrum of given region in the seismogram(s).
 
         Parameters
@@ -1696,11 +1696,11 @@ class SeismicBatch(Batch):
         names = [' '.join([i, str(index)]) for i in src]
         rate = self.meta[src[0]]['interval'] / 1e6
         spectrum_plot(arrs=arrs, frame=frame, rate=rate, max_freq=max_freq,
-                      names=names, figsize=figsize, save_to=save_to, **kwargs)
+                      names=names, figsize=figsize, save_to=save_to, dpi=dpi, **kwargs)
         return self
 
     def statistics_plot(self, src, index, stats, figsize=(10, 10), 
-                        save_to=None, dpi=300, **kwargs):
+                        save_to=None, dpi=None, **kwargs):
         """Plot seismogram(s) and various trace statistics.
 
         Parameters
@@ -1730,5 +1730,5 @@ class SeismicBatch(Batch):
         names = [' '.join([i, str(index)]) for i in src]
         rate = self.meta[src[0]]['interval'] / 1e6
         statistics_plot(arrs=arrs, stats=stats, rate=rate, names=names, figsize=figsize,
-                        save_to=save_to, **kwargs)
+                        save_to=save_to, dpi=dpi, **kwargs)
         return self
