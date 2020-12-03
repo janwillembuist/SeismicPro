@@ -11,8 +11,9 @@ def imshow_set_defaults(ax, arr, **kwargs):
 
     seismic_defaults = {
         'cmap': 'gray',
-        'vmin': np.np.quantile(arr, 0.1),
-        'max': np.np.quantile(arr, 0.9),
+        'vmin': np.quantile(arr, 0.1),
+        'vmax': np.quantile(arr, 0.9),
+        'extent': (0, arr.shape[1], arr.shape[0], 0)
     }
     ax.imshow(arr, aspect='auto', **{**seismic_defaults, **kwargs})
 
