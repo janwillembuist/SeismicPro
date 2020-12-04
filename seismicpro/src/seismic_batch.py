@@ -1500,7 +1500,7 @@ class SeismicBatch(Batch):
     #-------------------------------------------------------------------------#
     #                                 Plotters                                #
     #-------------------------------------------------------------------------#
-    def seismic_plot(self, src, index, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-arguments
+    def seismic_plot(self, src, index=0, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-arguments
                      src_picking=None, s=None, scatter_color=None,
                      figsize=(10, 7), y_ticker='time', x_ticker=None,
                      line_color=None, title=None, save_to=None, dpi=None, **kwargs):
@@ -1543,7 +1543,7 @@ class SeismicBatch(Batch):
         -------
         Multi-column subplots.
         """
-        pos = self.index.get_pos(index)
+        pos = index
         if len(np.atleast_1d(src)) == 1:
             src = (src,)
 
@@ -1557,7 +1557,7 @@ class SeismicBatch(Batch):
         arrs = [getattr(self, isrc)[pos] for isrc in src]
         names = [' '.join([i, str(index)]) for i in src]
 
-        x_ticker, y_ticker = infer_axis_tickers(self, index, src[0], x_ticker, y_ticker)
+        x_ticker, y_ticker = infer_axis_tickers(self, self.indices[pos], src[0], x_ticker, y_ticker)
         seismic_plot(arrs=arrs, wiggle=wiggle, xlim=xlim, ylim=ylim, std=std,
                      pts=pts_picking, s=s, scatter_color=scatter_color,
                      figsize=figsize, names=names, save_to=save_to,

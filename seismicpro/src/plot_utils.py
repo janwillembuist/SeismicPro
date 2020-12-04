@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import patches
-from matplotlib.ticker import ScalarFormatter, AutoLocator, IndexFormatter
+from matplotlib.ticker import ScalarFormatter, AutoLocator, IndexFormatter, LinearLocator, FixedFormatter
 from matplotlib import patches, colors as mcolors
 
 from .utils import measure_gain_amplitude
@@ -525,6 +525,18 @@ def plot_metrics_map(metrics_map, cmap=None, title=None, figsize=(10, 7), # pyli
     _set_ticks(ax=ax, img_shape=metrics_map.T.shape, ticks_range_x=ticks_range_x,
                ticks_range_y=ticks_range_y, x_ticks=x_ticks, y_ticks=y_ticks,
                fontsize=fontsize)
+
+    # Block bellow does the same as _set_ticks() above
+    # x_ticker = {
+    #     'locator': LinearLocator(x_ticks),
+    #     'formatter': FixedFormatter(np.linspace(*ticks_range_x, x_ticks))
+    # }
+    
+    # y_ticker = {
+    #     'locator': LinearLocator(y_ticks),
+    #     'formatter': FixedFormatter(np.linspace(*ticks_range_y, y_ticks))
+    # }
+    # setup_tickers(ax, x_ticker, y_ticker)
 
     if save_to:
         plt.savefig(save_to, dpi=dpi, bbox_inches='tight', pad_inches=0.1)
