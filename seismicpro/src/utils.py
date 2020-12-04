@@ -794,32 +794,40 @@ def transform_to_fixed_width_columns(path, path_save=None, n_spaces=8, max_len=(
                 return
             shutil.copyfile(write_file.name, path)
 
-def infer_axis_tickers(batch, index, src, x_ticker, y_ticker):
+def infer_axis_tickers(batch, index, src, x_tick, y_tick):
     """ In case x_ticker / y_ticker strings, corresponding tickers will be infered from dataframe / meta. 
     In case x_ticker / y_ticker dicts, they should contains axis configuration and will be used as is. 
     """    
     df = batch.index.get_df(index)
 
-    ticker_x, ticker_y = {}, {}
+    x_ticker, y_ticker = {}, {}
     
-    # process x-axis
-    if isinstance(x_ticker, str): # infer tickers from dataframe
+    # process x-ticker
+    if isinstance(x_tick, str): # infer ticker from dataframe
         sorting = batch.meta[src]['sorting']
         if sorting is not None:
-            xticks_labels = df.sort_values(sorting)[x_ticker]
+            xticks_labels = df.sort_values(sorting)[x_tick]
         else:
-            xticks_labels = df[x_ticker]
-        ticker_x['x_formatter'] = IndexFormatter(xticks_labels)
-    elif isinstance(x_ticker, dict): # dict with config passed, it will be used directly
-        ticker_x = x_ticker
+            xticks_labels = df[x_tick]
+        x_ticker['formatter'] = IndexFormatter(xticks_labels)
 
-    # process y-axis
-    if y_ticker == 'time': # infer tickers from meta
+    elif isinstance(x_tick, dict): # dict with config passed, it will be used directly
+        x_ticker = x_tick
+    elif isinstance(x_tick, (list, tuple, np.ndarray)): # ticker will be inferred later in utils.setup_tickers
+        x_ticker = x_tick
+
+    # process y-ticker
+    if y_tick == 'time': # infer ticker from meta
         yticks_labels = batch.meta[src]['samples']
-        ticker_y['y_formatter'] = IndexFormatter(yticks_labels)
-    elif y_ticker == 'samples': # default tickers will be used
-        pass
-    elif isinstance(y_ticker, dict): # dict with config passed, it will be used directly
-        ticker_y = y_ticker
+        y_ticker['formatter'] = IndexFormatter(yticks_labels)
+
+    elif y_ticker == 'samples': # default ticker will be used
+        pass 
+
+    elif isinstance(y_tick, dict): 
+        y_ticker = y_tick
     
-    return ticker_x, ticker_y
+    elif isinstance(x_tick, (list, tuple, np.ndarray)): # ticker will be inferred later in utils.setup_tickers
+        y_ticker = x_tick
+    
+    return x_ticker, y_ticker

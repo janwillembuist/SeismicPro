@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import patches
-from matplotlib.ticker import ScalarFormatter, AutoLocator
+from matplotlib.ticker import ScalarFormatter, AutoLocator, IndexFormatter
 
 from .utils import measure_gain_amplitude
 
@@ -22,13 +22,23 @@ def setup_imshow(ax, arr, **kwargs):
     ax.imshow(arr, **{**defaults, **kwargs})
 
 def setup_tickers(ax, x_ticker, y_ticker):
-    """ Setup the x / y axis tickers from the configs. In case config miss ticker - default ticker will be used. """
+    """ Setup the x / y axis tickers from the configs. 
+    In case config miss ticker - default ticker will be used.
+    In case ticker is array-like - matplotlib.ticker.IndexFormatter(ticker) will be used. """
 
-    ax.xaxis.set_major_locator(x_ticker.get('x_locator', AutoLocator()))
-    ax.yaxis.set_major_locator(y_ticker.get('y_locator', AutoLocator()))
+    def _cast_ticker(ticker):
+        if isinstance(ticker, (list, tuple, np.ndarray)):
+            return IndexFormatter(ticker)
+        else:
+            return ticker
 
-    ax.xaxis.set_major_formatter(x_ticker.get('x_formatter', ScalarFormatter()))
-    ax.yaxis.set_major_formatter(y_ticker.get('y_formatter', ScalarFormatter()))
+    x_ticker, y_ticker = [_cast_ticker(ticker) for ticker in [x_ticker, y_ticker]]
+
+    ax.xaxis.set_major_locator(x_ticker.get('locator', AutoLocator()))
+    ax.yaxis.set_major_locator(y_ticker.get('locator', AutoLocator()))
+
+    ax.xaxis.set_major_formatter(x_ticker.get('formatter', ScalarFormatter()))
+    ax.yaxis.set_major_formatter(y_ticker.get('formatter', ScalarFormatter()))
 
 def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-branches, too-many-arguments
                  pts=None, s=None, scatter_color=None, names=None, figsize=None,

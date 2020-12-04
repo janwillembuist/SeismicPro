@@ -1500,11 +1500,10 @@ class SeismicBatch(Batch):
     #-------------------------------------------------------------------------#
     #                                 Plotters                                #
     #-------------------------------------------------------------------------#
-
     def seismic_plot(self, src, index, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-arguments
-                     src_picking=None, s=None, scatter_color=None, figsize=(10, 7), 
-                     y_ticker='time', x_ticker=None, line_color=None, 
-                     title=None, save_to=None, dpi=None, **kwargs):
+                     src_picking=None, s=None, scatter_color=None,
+                     figsize=(10, 7), y_ticker='time', x_ticker=None,
+                     line_color=None, title=None, save_to=None, dpi=None, **kwargs):
         """Plot seismic traces.
 
         Parameters
