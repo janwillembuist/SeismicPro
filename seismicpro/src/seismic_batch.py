@@ -1500,9 +1500,9 @@ class SeismicBatch(Batch):
     #-------------------------------------------------------------------------#
     #                                 Plotters                                #
     #-------------------------------------------------------------------------#
-    def seismic_plot(self, src, index=0, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-arguments
+    def seismic_plot(self, src, pos=0, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-arguments
                      src_picking=None, s=None, scatter_color=None,
-                     figsize=(10, 7), y_ticker='time', x_ticker=None,
+                     figsize=(10, 7), y_ticker='samples', x_ticker=None,
                      line_color=None, title=None, save_to=None, dpi=None, **kwargs):
         """Plot seismic traces.
 
@@ -1510,8 +1510,8 @@ class SeismicBatch(Batch):
         ----------
         src : str or array of str
             The batch component(s) with data to show.
-        index : same type as batch.indices
-            Data index to show.
+        pos : int, default 0
+            Position of the object in the batch to show.
         wiggle : bool, default to False
             Show traces in a wiggle form.
         xlim : tuple, optionalgit
@@ -1543,7 +1543,6 @@ class SeismicBatch(Batch):
         -------
         Multi-column subplots.
         """
-        pos = index
         if len(np.atleast_1d(src)) == 1:
             src = (src,)
 
@@ -1555,7 +1554,7 @@ class SeismicBatch(Batch):
             pts_picking = None
 
         arrs = [getattr(self, isrc)[pos] for isrc in src]
-        names = [' '.join([i, str(index)]) for i in src]
+        names = [' '.join([i, str(self.indices[pos])]) for i in src]
 
         x_ticker, y_ticker = infer_axis_tickers(self, self.indices[pos], src[0], x_ticker, y_ticker)
         seismic_plot(arrs=arrs, wiggle=wiggle, xlim=xlim, ylim=ylim, std=std,
