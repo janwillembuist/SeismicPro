@@ -4,11 +4,12 @@ import shutil
 import tempfile
 import functools
 
+import segyio
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LinearRegression
 from scipy.signal import medfilt, hilbert
-import segyio
+from matplotlib.ticker import IndexFormatter
+from sklearn.linear_model import LinearRegression
 
 from ..batchflow import FilesIndex
 
@@ -792,3 +793,33 @@ def transform_to_fixed_width_columns(path, path_save=None, n_spaces=8, max_len=(
             if path_save:
                 return
             shutil.copyfile(write_file.name, path)
+
+def infer_axis_tickers(batch, index, src, x_ticker, y_ticker):
+    """ In case x_ticker / y_ticker strings, corresponding tickers will be infered from dataframe / meta. 
+    In case x_ticker / y_ticker dicts, they should contains axis configuration and will be used as is. 
+    """    
+    df = batch.index.get_df(index)
+
+    ticker_x, ticker_y = {}, {}
+    
+    # process x-axis
+    if isinstance(x_ticker, str): # infer tickers from dataframe
+        sorting = batch.meta[src]['sorting']
+        if sorting is not None:
+            xticks_labels = df.sort_values(sorting)[x_ticker]
+        else:
+            xticks_labels = df[x_ticker]
+        ticker_x['x_formatter'] = IndexFormatter(xticks_labels)
+    elif isinstance(x_ticker, dict): # dict with config passed, it will be used directly
+        ticker_x = x_ticker
+
+    # process y-axis
+    if y_ticker == 'time': # infer tickers from meta
+        yticks_labels = batch.meta[src]['samples']
+        ticker_y['y_formatter'] = IndexFormatter(yticks_labels)
+    elif y_ticker == 'samples': # default tickers will be used
+        pass
+    elif isinstance(y_ticker, dict): # dict with config passed, it will be used directly
+        ticker_y = y_ticker
+    
+    return ticker_x, ticker_y

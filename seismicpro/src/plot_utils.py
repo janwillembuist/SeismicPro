@@ -3,24 +3,36 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import patches
+from matplotlib.ticker import ScalarFormatter, AutoLocator
+
 from .utils import measure_gain_amplitude
 
 
-def imshow_set_defaults(ax, arr, **kwargs):
+def setup_imshow(ax, arr, **kwargs):
     """ Calls ax.imshow(arr) with some set of arguments being fixed """
 
-    seismic_defaults = {
+    defaults = {
         'cmap': 'gray',
         'vmin': np.quantile(arr, 0.1),
         'vmax': np.quantile(arr, 0.9),
-        'extent': (0, arr.shape[1], arr.shape[0], 0)
+        'aspect': 'auto',
+        'extent': (0, arr.shape[1], arr.shape[0], 0),
     }
-    ax.imshow(arr, aspect='auto', **{**seismic_defaults, **kwargs})
 
+    ax.imshow(arr, **{**defaults, **kwargs})
+
+def setup_tickers(ax, x_ticker, y_ticker):
+    """ Setup the x / y axis tickers from the configs. In case config miss ticker - default ticker will be used. """
+
+    ax.xaxis.set_major_locator(x_ticker.get('x_locator', AutoLocator()))
+    ax.yaxis.set_major_locator(y_ticker.get('y_locator', AutoLocator()))
+
+    ax.xaxis.set_major_formatter(x_ticker.get('x_formatter', ScalarFormatter()))
+    ax.yaxis.set_major_formatter(y_ticker.get('y_formatter', ScalarFormatter()))
 
 def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-branches, too-many-arguments
                  pts=None, s=None, scatter_color=None, names=None, figsize=None,
-                 save_to=None, dpi=None, line_color=None, title=None, **kwargs):
+                 save_to=None, dpi=None, line_color=None, title=None, x_ticker={}, y_ticker={},  **kwargs):
     """Plot seismic traces.
 
     Parameters
@@ -83,6 +95,7 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
         xlim_curr = xlim or (0, len(arr))
 
         if arr.ndim == 2:
+            setup_tickers(ax[0, i], x_ticker, y_ticker)
             ylim_curr = ylim or (0, len(arr[0]))
 
             if wiggle:
@@ -102,8 +115,7 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
                     ax[0, i].fill_betweenx(y, k, x, where=(x > k), color=col)
 
             else:
-                imshow_set_defaults(ax[0, i], arr.T, **kwargs)
-
+                setup_imshow(ax[0, i], arr.T, **kwargs)
         elif arr.ndim == 1:
             ax[0, i].plot(arr, **kwargs)
         else:
@@ -166,7 +178,7 @@ def spectrum_plot(arrs, frame, rate, max_freq=None, names=None,
 
     _, ax = plt.subplots(2, len(arrs), figsize=figsize, squeeze=False)
     for i, arr in enumerate(arrs):
-        imshow_set_defaults(ax[0, i], arr.T, **kwargs)
+        setup_imshow(ax[0, i], arr.T, **kwargs)
         rect = patches.Rectangle((frame[0].start, frame[1].start),
                                  frame[0].stop - frame[0].start,
                                  frame[1].stop - frame[1].start,
@@ -323,7 +335,7 @@ def statistics_plot(arrs, stats, rate=None, figsize=None, names=None,
         ax[0, i].set_xlim([0, len(arr)])
         ax[0, i].set_aspect('auto')
         ax[0, i].set_title(names[i] if names is not None else '')
-        imshow_set_defaults(ax[1, i], arr.T, **kwargs)
+        setup_imshow(ax[1, i], arr.T, **kwargs)
 
     if save_to is not None:
         plt.savefig(save_to, dpi=dpi)

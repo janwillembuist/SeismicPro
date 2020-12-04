@@ -14,7 +14,7 @@ from ..batchflow import action, inbatch_parallel, Batch, any_action_failed
 
 from .seismic_index import SegyFilesIndex, FieldIndex, KNNIndex, TraceIndex, CustomIndex
 
-from .utils import (FILE_DEPENDEND_COLUMNS, partialmethod, calculate_sdc_for_field, massive_block)
+from .utils import (FILE_DEPENDEND_COLUMNS, partialmethod, calculate_sdc_for_field, massive_block, infer_axis_tickers)
 from .file_utils import write_segy_file
 from .plot_utils import spectrum_plot, seismic_plot, statistics_plot, gain_plot
 
@@ -1502,8 +1502,9 @@ class SeismicBatch(Batch):
     #-------------------------------------------------------------------------#
 
     def seismic_plot(self, src, index, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-arguments
-                     src_picking=None, s=None, scatter_color=None, figsize=(10, 7),
-                     line_color=None, title=None, save_to=None, dpi=None, **kwargs):
+                     src_picking=None, s=None, scatter_color=None, figsize=(10, 7), 
+                     y_ticker='time', x_ticker=None, line_color=None, 
+                     title=None, save_to=None, dpi=None, **kwargs):
         """Plot seismic traces.
 
         Parameters
@@ -1556,11 +1557,15 @@ class SeismicBatch(Batch):
 
         arrs = [getattr(self, isrc)[pos] for isrc in src]
         names = [' '.join([i, str(index)]) for i in src]
+
+        x_ticker, y_ticker = infer_axis_tickers(self, index, src[0], x_ticker, y_ticker)
         seismic_plot(arrs=arrs, wiggle=wiggle, xlim=xlim, ylim=ylim, std=std,
                      pts=pts_picking, s=s, scatter_color=scatter_color,
                      figsize=figsize, names=names, save_to=save_to,
-                     dpi=dpi, line_color=line_color, title=title, **kwargs)
+                     dpi=dpi, line_color=line_color, title=title, 
+                     x_ticker=x_ticker, y_ticker=y_ticker, **kwargs)
         return self
+    
 
     def crops_plot(self, src, index, # pylint: disable=too-many-arguments
                    num_crops=None,
