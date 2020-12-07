@@ -29,7 +29,7 @@ def setup_tickers(ax, x_ticker, y_ticker):
 
     def _cast_ticker(ticker):
         if isinstance(ticker, (list, tuple, np.ndarray)):
-            return IndexFormatter(ticker)
+            return {'formatter': IndexFormatter(ticker)}
         else:
             return ticker
 
@@ -42,7 +42,7 @@ def setup_tickers(ax, x_ticker, y_ticker):
     ax.yaxis.set_major_formatter(y_ticker.get('formatter', ScalarFormatter()))
 
 def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-branches, too-many-arguments
-                 pts=None, s=None, scatter_color=None, names=None, figsize=None,
+                 pts=None, s=None, scatter_color=None, names=None, figsize=(10, 7),
                  save_to=None, dpi=None, line_color=None, title=None, x_ticker={}, y_ticker={},  **kwargs):
     """Plot seismic traces.
 
@@ -97,7 +97,11 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
         names = (names,)
 
     line_color = 'k' if line_color is None else line_color
-    fig, ax = plt.subplots(1, len(arrs), figsize=figsize, squeeze=False)
+#    fig, ax = plt.subplots(1, len(arrs), figsize=figsize, squeeze=False)
+    grid = plt.GridSpec(4, 4, hspace=0.2, wspace=0.2)
+    fig = plt.figure(figsize=figsize)
+    ax = np.empty((1, 1), dtype='object')
+    ax[0, 0] = fig.add_subplot(grid[:-1, 1:])
     for i, arr in enumerate(arrs):
 
         if not wiggle:
@@ -107,6 +111,15 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
 
         if arr.ndim == 2:
             setup_tickers(ax[0, i], x_ticker, y_ticker)
+            attribute, ratio = kwargs.pop('attribute'), kwargs.pop('ratio', 1)
+            from mpl_toolkits.axes_grid1 import make_axes_locatable
+            divider = make_axes_locatable(ax[0, i])
+            ax_attr = divider.append_axes("top", ratio, pad=0.0, sharex=ax[0, i])
+            ax_attr.scatter(range(len(attribute)), attribute, s=1)
+            ax_attr.invert_yaxis()
+            ax_attr.set_xticks([])
+            ax_attr.yaxis.tick_right()
+
             ylim_curr = ylim or (0, len(arr[0]))
 
             if wiggle:
@@ -127,6 +140,7 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
 
             else:
                 setup_imshow(ax[0, i], arr.T, **kwargs)
+
         elif arr.ndim == 1:
             ax[0, i].plot(arr, **kwargs)
         else:
