@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib import patches
 from matplotlib.ticker import ScalarFormatter, AutoLocator, IndexFormatter, LinearLocator, FixedFormatter
 from matplotlib import patches, colors as mcolors
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from .utils import measure_gain_amplitude
 
@@ -41,9 +42,19 @@ def setup_tickers(ax, x_ticker, y_ticker):
     ax.xaxis.set_major_formatter(x_ticker.get('formatter', ScalarFormatter()))
     ax.yaxis.set_major_formatter(y_ticker.get('formatter', ScalarFormatter()))
 
+def scatter_on_top(ax, attribute):
+    """" Plot additional scatter on top of the 'ax' axes.  """
+    divider = make_axes_locatable(ax)
+    top_subax = divider.append_axes("top", 0.65, pad=0.01,  sharex=ax)
+    top_subax.scatter(range(len(attribute)), attribute, s=5, c='k')
+    top_subax.invert_yaxis()
+    top_subax.set_xticks([])
+    top_subax.yaxis.tick_right()
+
 def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-branches, too-many-arguments
-                 pts=None, s=None, scatter_color=None, names=None, figsize=(10, 7),
-                 save_to=None, dpi=None, line_color=None, title=None, x_ticker={}, y_ticker={},  **kwargs):
+                 pts=None, s=None, scatter_color=None, names=None, figsize=(7, 4),
+                 save_to=None, dpi=None, line_color=None, title=None, 
+                 attribute=None, x_ticker={}, y_ticker={},  **kwargs):
     """Plot seismic traces.
 
     Parameters
@@ -90,19 +101,18 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
         If dimensions of given ```arrs``` not in [1, 2].
 
     """
-    if isinstance(arrs, np.ndarray) and arrs.ndim == 2:
-        arrs = (arrs,)
-
     if isinstance(names, str):
         names = (names,)
 
     line_color = 'k' if line_color is None else line_color
-#    fig, ax = plt.subplots(1, len(arrs), figsize=figsize, squeeze=False)
-    grid = plt.GridSpec(4, 4, hspace=0.2, wspace=0.2)
-    fig = plt.figure(figsize=figsize)
-    ax = np.empty((1, 1), dtype='object')
-    ax[0, 0] = fig.add_subplot(grid[:-1, 1:])
-    for i, arr in enumerate(arrs):
+
+    if np.isscalar(arrs[0][0]): # arrs is a single seismogramm i.e. 2darray, wrap it with another array with dtype='O' 
+        empty = np.empty((1, 1), dtype='O')
+        empty[0, 0] = arrs
+        arrs = empty
+
+    fig, ax = plt.subplots(*arrs.shape, figsize=figsize, squeeze=False)
+    for i, (arr, ax) in enumerate(zip(arrs.flatten(), ax.flatten())):
 
         if not wiggle:
             arr = np.squeeze(arr)
@@ -110,15 +120,7 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
         xlim_curr = xlim or (0, len(arr))
 
         if arr.ndim == 2:
-            setup_tickers(ax[0, i], x_ticker, y_ticker)
-            attribute, ratio = kwargs.pop('attribute'), kwargs.pop('ratio', 1)
-            from mpl_toolkits.axes_grid1 import make_axes_locatable
-            divider = make_axes_locatable(ax[0, i])
-            ax_attr = divider.append_axes("top", ratio, pad=0.0, sharex=ax[0, i])
-            ax_attr.scatter(range(len(attribute)), attribute, s=1)
-            ax_attr.invert_yaxis()
-            ax_attr.set_xticks([])
-            ax_attr.yaxis.tick_right()
+            setup_tickers(ax, x_ticker, y_ticker)
 
             ylim_curr = ylim or (0, len(arr[0]))
 
@@ -135,30 +137,33 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
                 for ix, k in enumerate(offsets):
                     x = k + std * arr[k, slice(*ylim_curr)] / np.std(arr)
                     col = line_color[ix]
-                    ax[0, i].plot(x, y, '{}-'.format(col))
-                    ax[0, i].fill_betweenx(y, k, x, where=(x > k), color=col)
+                    ax.plot(x, y, '{}-'.format(col))
+                    ax.fill_betweenx(y, k, x, where=(x > k), color=col)
 
             else:
-                setup_imshow(ax[0, i], arr.T, **kwargs)
+                setup_imshow(ax, arr.T, **kwargs)
+        
+            if attribute is not None:
+                scatter_on_top(ax, attribute.flatten()[i])
 
         elif arr.ndim == 1:
-            ax[0, i].plot(arr, **kwargs)
+            ax.plot(arr, **kwargs)
         else:
             raise ValueError('Invalid ndim to plot data.')
 
-        if names is not None:
-            ax[0, i].set_title(names[i])
+        # if names is not None:
+        #     ax.set_title(names[i])
 
         if arr.ndim == 2:
-            ax[0, i].set_ylim([ylim_curr[1], ylim_curr[0]])
+            ax.set_ylim([ylim_curr[1], ylim_curr[0]])
             if (not wiggle) or (pts is not None):
-                ax[0, i].set_xlim(xlim_curr)
+                ax.set_xlim(xlim_curr)
 
         if arr.ndim == 1:
             plt.xlim(xlim_curr)
 
         if pts is not None:
-            ax[0, i].scatter(*pts, s=s, c=scatter_color)
+            ax.scatter(*pts, s=s, c=scatter_color)
 
     if title is not None:
         fig.suptitle(title)

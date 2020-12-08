@@ -1503,6 +1503,7 @@ class SeismicBatch(Batch):
     def seismic_plot(self, src, pos=0, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-arguments
                      src_picking=None, s=None, scatter_color=None,
                      figsize=(10, 7), y_ticker='samples', x_ticker=None,
+                     attribute_plot=None,
                      line_color=None, title=None, save_to=None, dpi=None, **kwargs):
         """Plot seismic traces.
 
@@ -1545,7 +1546,9 @@ class SeismicBatch(Batch):
         """
         if len(np.atleast_1d(src)) == 1:
             src = (src,)
-
+        if isinstance(pos, int):
+            pos = (pos, )
+        
         if src_picking is not None:
             rate = self.meta[src[0]]['interval'] / 1e3
             picking = getattr(self, src_picking)[pos] / rate
@@ -1553,14 +1556,27 @@ class SeismicBatch(Batch):
         else:
             pts_picking = None
 
-        arrs = [getattr(self, isrc)[pos] for isrc in src]
-        names = [' '.join([i, str(self.indices[pos])]) for i in src]
+        arrs = np.empty((len(pos), len(src)), 'O')
+        for j, ipos in enumerate(pos):
+            for i, isrc in enumerate(src):
+                arrs[j, i] = getattr(self, isrc)[ipos]
 
-        x_ticker, y_ticker = infer_axis_tickers(self, self.indices[pos], src[0], x_ticker, y_ticker)
+        if attribute_plot is not None: 
+            attribute = np.empty((len(pos), 1), 'O')
+            for j, ipos in enumerate(pos):
+                attribute[j, 0] = getattr(self, attribute_plot)[ipos]
+            attribute = np.broadcast_to(attribute, arrs.shape)
+        else:
+            attribute = None
+
+        names = [' '.join([i, str(self.indices[ipos])]) for i in src for ipos in pos]
+        
+        x_ticker, y_ticker = infer_axis_tickers(self, self.indices[pos[0]], src[0], x_ticker, y_ticker)
         seismic_plot(arrs=arrs, wiggle=wiggle, xlim=xlim, ylim=ylim, std=std,
                      pts=pts_picking, s=s, scatter_color=scatter_color,
                      figsize=figsize, names=names, save_to=save_to,
-                     dpi=dpi, line_color=line_color, title=title, 
+                     dpi=dpi, line_color=line_color, title=title,
+                     attribute=attribute, 
                      x_ticker=x_ticker, y_ticker=y_ticker, **kwargs)
         return self
     
