@@ -51,6 +51,13 @@ def scatter_on_top(ax, attribute):
     top_subax.set_xticks([])
     top_subax.yaxis.tick_right()
 
+def scatter_within(ax, points, **scatter_within_kwargs):
+    if np.isscalar(points[0]):
+        points = (points, )
+
+    for ipts in points:
+        ax.scatter(range(len(ipts)), ipts, **scatter_within_kwargs)
+
 def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-branches, too-many-arguments
                  pts=None, s=None, scatter_color=None, names=None, figsize=(7, 4),
                  save_to=None, dpi=None, line_color=None, title=None, 
@@ -146,6 +153,9 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
             if attribute is not None:
                 scatter_on_top(ax, attribute.flatten()[i])
 
+            if pts is not None:
+                scatter_within(ax, pts[i])
+
         elif arr.ndim == 1:
             ax.plot(arr, **kwargs)
         else:
@@ -161,9 +171,6 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
 
         if arr.ndim == 1:
             plt.xlim(xlim_curr)
-
-        if pts is not None:
-            ax.scatter(*pts, s=s, c=scatter_color)
 
     if title is not None:
         fig.suptitle(title)

@@ -1503,7 +1503,7 @@ class SeismicBatch(Batch):
     def seismic_plot(self, src, pos=0, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-arguments
                      src_picking=None, s=None, scatter_color=None,
                      figsize=(10, 7), y_ticker='samples', x_ticker=None,
-                     attribute_plot=None,
+                     attribute_plot=None, plot_single=True,
                      line_color=None, title=None, save_to=None, dpi=None, **kwargs):
         """Plot seismic traces.
 
@@ -1537,24 +1537,20 @@ class SeismicBatch(Batch):
             The trace color.
         title : str
             Plot title.
+        plot_single: bool
+            Plot scatter points on the single gather
         kwargs : dict
             Additional keyword arguments for plot.
 
         Returns
         -------
-        Multi-column subplots.
+            Plots multi column/row image.
         """
-        if len(np.atleast_1d(src)) == 1:
-            src = (src,)
+        if isinstance(src, str):
+            src = (src, )
         if isinstance(pos, int):
             pos = (pos, )
         
-        if src_picking is not None:
-            rate = self.meta[src[0]]['interval'] / 1e3
-            picking = getattr(self, src_picking)[pos] / rate
-            pts_picking = (range(len(picking)), picking)
-        else:
-            pts_picking = None
 
         arrs = np.empty((len(pos), len(src)), 'O')
         for j, ipos in enumerate(pos):
@@ -1562,18 +1558,43 @@ class SeismicBatch(Batch):
                 arrs[j, i] = getattr(self, isrc)[ipos]
 
         if attribute_plot is not None: 
-            attribute = np.empty((len(pos), 1), 'O')
+            if isinstance(attribute_plot, str):
+                attribute_plot = (attribute_plot, )
+
+            attribute = np.empty((len(pos), len(attribute_plot)), 'O')
             for j, ipos in enumerate(pos):
-                attribute[j, 0] = getattr(self, attribute_plot)[ipos]
+                for i, isrc in enumerate(attribute_plot):
+                    attribute[j, i] = getattr(self, isrc)[ipos]
             attribute = np.broadcast_to(attribute, arrs.shape)
         else:
             attribute = None
+
+        if src_picking is not None: 
+            if isinstance(src_picking, str):
+                src_picking = (src_picking, )
+            
+            rate = self.meta[src[0]]['interval'] / 1e3
+            pts = np.empty((len(pos), len(src_picking)), 'O')
+            for j, ipos in enumerate(pos):
+                for i, isrc in enumerate(src_picking):
+                    pts[j, i] = getattr(self, isrc)[ipos] / rate
+    
+            if plot_single:
+                pts_copy = np.array(pts)
+                for i in range(pts.shape[0]):
+                    for j in range(pts.shape[1]):
+                        pts[i, j] = pts_copy[i, :]
+                
+            pts = pts.flatten()
+
+        else:
+            pts = None
 
         names = [' '.join([i, str(self.indices[ipos])]) for i in src for ipos in pos]
         
         x_ticker, y_ticker = infer_axis_tickers(self, self.indices[pos[0]], src[0], x_ticker, y_ticker)
         seismic_plot(arrs=arrs, wiggle=wiggle, xlim=xlim, ylim=ylim, std=std,
-                     pts=pts_picking, s=s, scatter_color=scatter_color,
+                     pts=pts, s=s, scatter_color=scatter_color,
                      figsize=figsize, names=names, save_to=save_to,
                      dpi=dpi, line_color=line_color, title=title,
                      attribute=attribute, 
