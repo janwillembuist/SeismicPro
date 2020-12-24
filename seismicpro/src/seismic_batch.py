@@ -5,7 +5,6 @@ from itertools import product
 import warnings
 from textwrap import dedent
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy import signal
 from scipy.signal import hilbert
 import pywt
@@ -15,10 +14,9 @@ from ..batchflow import action, inbatch_parallel, Batch, any_action_failed
 
 from .seismic_index import SegyFilesIndex, FieldIndex, KNNIndex, TraceIndex, CustomIndex
 
-from .utils import (FILE_DEPENDEND_COLUMNS, partialmethod, calculate_sdc_for_field, massive_block,
-                    check_unique_fieldrecord_across_surveys)
+from .utils import (FILE_DEPENDEND_COLUMNS, partialmethod, calculate_sdc_for_field, massive_block, infer_axis_tickers)
 from .file_utils import write_segy_file
-from .plot_utils import IndexTracker, spectrum_plot, seismic_plot, statistics_plot, gain_plot
+from .plot_utils import spectrum_plot, seismic_plot, statistics_plot, gain_plot
 
 INDEX_UID = 'TRACE_SEQUENCE_FILE'
 
@@ -224,6 +222,45 @@ class SeismicBatch(Batch):
             getattr(new_batch, isrc)[pos_new] = getattr(self, isrc)[pos_old]
         return new_batch
 
+    @action
+    def add_components(self, components, init=None):
+        """ Add new components
+
+        Parameters
+        ----------
+        components : str or list
+            new component names
+        init : array-like
+            initial component data
+
+        Raises
+        ------
+        ValueError
+            If a component or an attribute with the given name already exists
+        """
+        super().add_components(components, init)
+
+        components = (components,) if isinstance(components, str) else components
+        for comp in components:
+            if comp not in self.meta:
+                self.meta[comp] = dict()
+        return self
+
+    def update_component(self, component, value):
+        """ Add a new component or update an existing one
+
+        Parameters
+        ----------
+        component : str
+            component name
+        value : array-like
+            component data
+        """
+        if component not in self.components:
+            self.add_components(component, init=value)
+        else:
+            setattr(self, component, value)
+
     def copy_meta(self, from_comp, to_comp):
         """Copy meta from one component to another or from list of components to list of
         components with same length.
@@ -259,45 +296,18 @@ class SeismicBatch(Batch):
 
         for fr_comp, t_comp in zip(from_comp, to_comp):
             if fr_comp not in self.meta:
-                raise ValueError('{} does not exist.'.format(fr_comp))
+                raise ValueError('Meta of the component {} does not exist.'.format(fr_comp))
 
             if fr_comp == t_comp:
                 continue
 
-            if t_comp in self.meta:
-                warnings.warn("Meta of component {} is not empty and".format(t_comp) + \
-                              " will be replaced by the meta from component {}.".format(fr_comp),
+            if self.meta.get(t_comp):
+                warnings.warn("Meta of the component {} is not empty and".format(t_comp) + \
+                              " will be replaced by the meta from the component {}.".format(fr_comp),
                               UserWarning)
+
             self.meta[t_comp] = self.meta[fr_comp].copy()
         return self
-
-    def items_viewer(self, src, scroll_step=1, **kwargs):
-        """Scroll and view batch items. Emaple of use:
-        ```
-        %matplotlib notebook
-
-        fig, tracker = batch.items_viewer('raw', vmin=-cv, vmax=cv, cmap='gray')
-        fig.canvas.mpl_connect('scroll_event', tracker.onscroll)
-        plt.show()
-        ```
-
-        Parameters
-        ----------
-        src : str
-            The batch component with data to show.
-        scroll_step : int, default: 1
-            Number of batch items scrolled at one time.
-        kwargs: dict
-            Additional keyword arguments for plt.
-
-        Returns
-        -------
-        fig, tracker
-        """
-        fig, ax = plt.subplots(1, 1)
-        tracker = IndexTracker(ax, getattr(self, src), self.indices,
-                               scroll_step=scroll_step, **kwargs)
-        return fig, tracker
 
     #-------------------------------------------------------------------------#
     #                              Load and Dump                              #
@@ -714,7 +724,7 @@ class SeismicBatch(Batch):
     @action
     @inbatch_parallel(init='_init_component')
     @apply_to_each_component
-    def assemble_crops(self, index, src, dst, fill_value=0.0):
+    def assemble_crops(self, index, src, dst, src_coords, fill_value=0.0):
         """
         Assembles crops from `src` into a single seismogram
 
@@ -736,7 +746,7 @@ class SeismicBatch(Batch):
 
         pos = self.index.get_pos(index)
         crops = getattr(self, src)[pos]
-        coords = self.meta[src]['crop_coords'][index]
+        coords = self.meta[src_coords]['crop_coords'][index]
 
         res_x = self.index.tracecounts[pos]
         res_y = len(self.meta[self.meta[src]['crops_source']]['samples'])
@@ -790,7 +800,9 @@ class SeismicBatch(Batch):
         ind = np.cumsum(traces_in_item)[:-1]
 
         dst_data = np.split(std_data, ind)
-        setattr(self, dst, np.array(dst_data + [None])[:-1]) # array implicitly converted to object dtype
+        dst_data = np.array(dst_data + [None])[:-1] # array implicitly converted to object dtype
+
+        self.update_component(dst, dst_data)
         self.copy_meta(src, dst)
         return self
 
@@ -858,7 +870,8 @@ class SeismicBatch(Batch):
             survey_id_col = params['survey_id_col']
 
         surveys_by_fieldrecord = np.unique(self.index.get_df(index=index, reset=False)[survey_id_col])
-        check_unique_fieldrecord_across_surveys(surveys_by_fieldrecord, index)
+        if len(surveys_by_fieldrecord) != 1:
+            raise ValueError('Field {} represents data from more than one survey!'.format(index))
         survey = surveys_by_fieldrecord[0]
 
         p_95 = params[survey]
@@ -1208,7 +1221,7 @@ class SeismicBatch(Batch):
         long_win, lead_win = energy, energy
         lead_win[:, length_win:] = lead_win[:, length_win:] - lead_win[:, :-length_win]
         energy = lead_win / (long_win + eps)
-        self.add_components(dst, init=np.array(energy + [None])[:-1]) # array implicitly converted to object dtype
+        self.update_component(dst, np.array(energy + [None])[:-1]) # array implicitly converted to object dtype
         return self
 
     @action
@@ -1311,15 +1324,14 @@ class SeismicBatch(Batch):
             current_sorting = None
 
         if current_sorting == sort_by:
-            return self
-
+            return self   
         self._sort(src=src, sort_by=sort_by, current_sorting=current_sorting, dst=dst)
         self.copy_meta(src, dst)
         self.meta[dst]['sorting'] = sort_by
         return self
 
-    @inbatch_parallel(init="indices", target="f")
-    def _sort(self, index, src, sort_by, current_sorting, dst=None):
+    @inbatch_parallel(init="_init_component", target="f")
+    def _sort(self, *index, src, sort_by, current_sorting, dst=None):
         """Sort traces.
 
         Parameters
@@ -1337,7 +1349,7 @@ class SeismicBatch(Batch):
         -------
         batch : SeismicBatch
             Batch with new trace sorting.
-        """
+        """ 
         pos = self.index.get_pos(index)
         df = self.index.get_df([index])
 
@@ -1350,74 +1362,6 @@ class SeismicBatch(Batch):
 
         getattr(self, dst)[pos] = getattr(self, src)[pos][order]
         return self
-
-    @action
-    @inbatch_parallel(init="_init_component", target="threads")
-    @apply_to_each_component
-    def to_2d(self, index, *args, src, dst=None, length_alignment=None, pad_value=0):
-        """Convert array of 1d arrays to 2d array.
-
-        Parameters
-        ----------
-        src : str, array-like
-            The batch components to get the data from.
-        dst : str, array-like
-            The batch components to put the result in.
-        length_alignment : str, optional
-            Defines what to do with arrays of diffetent lengths.
-            If 'min', cut the end by minimal array length.
-            If 'max', pad the end to maximal array length.
-            If None, try to put array to 2d array as is.
-
-        Returns
-        -------
-        batch : SeismicBatch
-            Batch with items converted to 2d arrays.
-        """
-        _ = args
-        pos = self.index.get_pos(index)
-        data = getattr(self, src)[pos]
-        if data is None or len(data) == 0:
-            return
-
-        try:
-            data_2d = np.vstack(data)
-        except ValueError as err:
-            if length_alignment is None:
-                raise ValueError('Try to set length_alingment to \'max\' or \'min\'') from err
-            if length_alignment == 'min':
-                nsamples = min([len(t) for t in data])
-            elif length_alignment == 'max':
-                nsamples = max([len(t) for t in data])
-            else:
-                raise NotImplementedError('Unknown length_alingment') from err
-            shape = (len(data), nsamples)
-            data_2d = np.full(shape, pad_value)
-            for i, arr in enumerate(data):
-                data_2d[i, :len(arr)] = arr[:nsamples]
-
-        getattr(self, dst)[pos] = data_2d
-
-    def trace_headers(self, header, flatten=False):
-        """Get trace heades.
-
-        Parameters
-        ----------
-        header : string
-            Header name.
-        flatten : bool
-            If False, array of headers will be splitted according to batch item sizes.
-            If True, return a flattened array. Dafault to False.
-
-        Returns
-        -------
-        arr : ndarray
-            Arrays of trace headers."""
-        tracecounts = self.index.tracecounts
-        values = self.index.get_df()[header].values
-        if flatten:
-            return values
-        return np.array(np.split(values, np.cumsum(tracecounts)[:-1]) + [None])[:-1]
 
     #-------------------------------------------------------------------------#
     #                           DPA. Picking Actions                          #
@@ -1460,7 +1404,7 @@ class SeismicBatch(Batch):
 
         dst_data = np.split(dst_data, ind)
         dst_data = np.array([np.squeeze(i) for i in dst_data] + [None])[:-1]
-        setattr(self, dst, dst_data)
+        self.update_component(dst, dst_data)
         return self
 
     @action
@@ -1487,7 +1431,7 @@ class SeismicBatch(Batch):
             data = np.argmax(data, axis=1)
 
         dst_data = massive_block(data)
-        setattr(self, dst, np.array(dst_data + [None])[:-1]) # array implicitly converted to object dtype
+        self.update_component(dst, np.array(dst_data + [None])[:-1]) # array implicitly converted to object dtype
         return self
 
     @inbatch_parallel(init='_init_component', target="threads")
@@ -1550,24 +1494,24 @@ class SeismicBatch(Batch):
         energy = np.stack(getattr(self, src))
         energy = np.gradient(energy, axis=1)
         picking = np.argmax(energy, axis=1)
-        self.add_components(dst, np.array(picking + [None])[:-1]) # array implicitly converted to object dtype
+        self.update_component(dst, np.array(picking + [None])[:-1]) # array implicitly converted to object dtype
         return self
 
     #-------------------------------------------------------------------------#
     #                                 Plotters                                #
     #-------------------------------------------------------------------------#
-
-    def seismic_plot(self, src, index, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-arguments
-                     src_picking=None, s=None, scatter_color=None, figsize=None,
-                     save_to=None, dpi=None, line_color=None, title=None, **kwargs):
+    def seismic_plot(self, src, pos=0, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-arguments
+                     src_picking=None, s=None, scatter_color=None,
+                     figsize=(10, 7), y_ticker='samples', x_ticker=None,
+                     line_color=None, title=None, save_to=None, dpi=None, **kwargs):
         """Plot seismic traces.
 
         Parameters
         ----------
         src : str or array of str
             The batch component(s) with data to show.
-        index : same type as batch.indices
-            Data index to show.
+        pos : int, default 0
+            Position of the object in the batch to show.
         wiggle : bool, default to False
             Show traces in a wiggle form.
         xlim : tuple, optionalgit
@@ -1599,7 +1543,6 @@ class SeismicBatch(Batch):
         -------
         Multi-column subplots.
         """
-        pos = self.index.get_pos(index)
         if len(np.atleast_1d(src)) == 1:
             src = (src,)
 
@@ -1611,12 +1554,16 @@ class SeismicBatch(Batch):
             pts_picking = None
 
         arrs = [getattr(self, isrc)[pos] for isrc in src]
-        names = [' '.join([i, str(index)]) for i in src]
+        names = [' '.join([i, str(self.indices[pos])]) for i in src]
+
+        x_ticker, y_ticker = infer_axis_tickers(self, self.indices[pos], src[0], x_ticker, y_ticker)
         seismic_plot(arrs=arrs, wiggle=wiggle, xlim=xlim, ylim=ylim, std=std,
                      pts=pts_picking, s=s, scatter_color=scatter_color,
                      figsize=figsize, names=names, save_to=save_to,
-                     dpi=dpi, line_color=line_color, title=title, **kwargs)
+                     dpi=dpi, line_color=line_color, title=title, 
+                     x_ticker=x_ticker, y_ticker=y_ticker, **kwargs)
         return self
+    
 
     def crops_plot(self, src, index, # pylint: disable=too-many-arguments
                    num_crops=None,
@@ -1691,7 +1638,7 @@ class SeismicBatch(Batch):
         return self
 
     def gain_plot(self, src, index, window=51, xlim=None, ylim=None,
-                  figsize=None, names=None, **kwargs):
+                  figsize=(10, 7), names=None,  save_to=None, dpi=None, **kwargs):
         """Gain's graph plots the ratio of the maximum mean value of
         the amplitude to the mean value of the amplitude at the moment t.
 
@@ -1720,7 +1667,7 @@ class SeismicBatch(Batch):
         return self
 
     def spectrum_plot(self, src, index, frame, max_freq=None,
-                      figsize=None, save_to=None, **kwargs):
+                      figsize=(10, 10), save_to=None, dpi=None, **kwargs):
         """Plot seismogram(s) and power spectrum of given region in the seismogram(s).
 
         Parameters
@@ -1752,10 +1699,11 @@ class SeismicBatch(Batch):
         names = [' '.join([i, str(index)]) for i in src]
         rate = self.meta[src[0]]['interval'] / 1e6
         spectrum_plot(arrs=arrs, frame=frame, rate=rate, max_freq=max_freq,
-                      names=names, figsize=figsize, save_to=save_to, **kwargs)
+                      names=names, figsize=figsize, save_to=save_to, dpi=dpi, **kwargs)
         return self
 
-    def statistics_plot(self, src, index, stats, figsize=None, save_to=None, **kwargs):
+    def statistics_plot(self, src, index, stats, figsize=(10, 10), 
+                        save_to=None, dpi=None, **kwargs):
         """Plot seismogram(s) and various trace statistics.
 
         Parameters
@@ -1785,5 +1733,5 @@ class SeismicBatch(Batch):
         names = [' '.join([i, str(index)]) for i in src]
         rate = self.meta[src[0]]['interval'] / 1e6
         statistics_plot(arrs=arrs, stats=stats, rate=rate, names=names, figsize=figsize,
-                        save_to=save_to, **kwargs)
+                        save_to=save_to, dpi=dpi, **kwargs)
         return self
