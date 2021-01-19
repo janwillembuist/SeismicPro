@@ -61,6 +61,7 @@ def scatter_within(ax, points, **scatter_within_kwargs):
 def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-branches, too-many-arguments
                  pts=None, s=None, scatter_color=None, names=None, figsize=(7, 4),
                  save_to=None, dpi=None, line_color=None, title=None, 
+                 columnwise=False, unite_points=False, 
                  attribute=None, x_ticker={}, y_ticker={},  **kwargs):
     """Plot seismic traces.
 
@@ -113,17 +114,47 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
 
     line_color = 'k' if line_color is None else line_color
 
-    if np.isscalar(arrs[0][0]): # arrs is a single seismogramm i.e. 2darray, wrap it with another array with dtype='O' 
-        empty = np.empty((1, 1), dtype='O')
-        empty[0, 0] = arrs
-        arrs = empty
+    def is_2d_array(array):
+        return np.isscalar(array[0][0])
+    
+    def is_1d_array(array):
+        return np.isscalar(array[0])
 
-    fig, ax = plt.subplots(*arrs.shape, figsize=figsize, squeeze=False)
-    for i, (arr, ax) in enumerate(zip(arrs.flatten(), ax.flatten())):
+    def infer_array(cond, arrs, transpose=False, broadcast_to=None, unite_points=False):
+        if arrs is None:
+            return arrs
+    
+        if cond(arrs): # arrs is a single seismogramm i.e. 2darray, wrap it with another array with dtype='O' 
+            blank = np.empty((1, 1), 'O')
+            blank[0, 0] = arrs
+        elif cond(arrs[0]):
+            blank = np.empty((1, len(arrs)), 'O')
+            for i, _ in enumerate(arrs):
+                blank[0, i] = arrs[i]
+        elif cond(arrs[0][0]):
+            blank = np.empty((len(arrs), len(arrs[0])), 'O')
+            for i, _ in enumerate(arrs):
+                for j, _ in enumerate(arrs[0]):
+                    blank[i, j] = arrs[i][j]
+        
+        if transpose: blank = blank.T
+        if broadcast_to: blank = np.broadcast_to(blank, broadcast_to)
 
-        if not wiggle:
-            arr = np.squeeze(arr)
+        return blank
 
+    blank = infer_array(is_2d_array, arrs, columnwise)
+    att = infer_array(is_1d_array, attribute, columnwise)
+    pts = infer_array(is_1d_array, pts,       columnwise)
+    if pts is not None and pts.shape > blank.shape:
+        #pts = infer_array(scalar_2d, pts if columnwise else pts.T, not columnwise)
+        pts = infer_array(is_2d_array, pts)
+    
+    fig, ax = plt.subplots(*blank.shape, figsize=figsize, squeeze=False)
+
+    for i, (arr, ax) in enumerate(zip(blank.flatten(), ax.flatten())):
+
+        # if not wiggle:
+        #     arr = np.squeeze(arr)
         xlim_curr = xlim or (0, len(arr))
 
         if arr.ndim == 2:
@@ -151,10 +182,10 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
                 setup_imshow(ax, arr.T, **kwargs)
         
             if attribute is not None:
-                scatter_on_top(ax, attribute.flatten()[i])
+                scatter_on_top(ax, att.flatten()[i])
 
             if pts is not None:
-                scatter_within(ax, pts[i])
+                scatter_within(ax, pts.flatten()[i])
 
         elif arr.ndim == 1:
             ax.plot(arr, **kwargs)
@@ -276,14 +307,15 @@ def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=None,
     if isinstance(arrs, np.ndarray) and arrs.ndim == 2:
         arrs = (arrs,)
 
-    _, ax = plt.subplots(1, len(arrs), figsize=figsize)
-    ax = ax.reshape(-1) if isinstance(ax, np.ndarray) else [ax]
+    _, ax = plt.subplots(2, len(arrs), figsize=figsize, squeeze=False)
+    
+    for i, arr in enumerate(arrs):
+        setup_imshow(ax[0, i], arr.T, **kwargs)
 
-    for ix, sample in enumerate(arrs):
-        result = measure_gain_amplitude(sample, window)
-        ax[ix].plot(result, range(len(result)), **kwargs)
+        result = measure_gain_amplitude(arr, window)
+        ax[1, i].plot(result, range(len(result)), **kwargs)
         if names is not None:
-            ax[ix].set_title(names[ix])
+            ax[1, x].set_title(names[i])
         if xlim is None:
             set_xlim = (max(result)-min(result)*.1, max(result)+min(result)*1.1)
         elif isinstance(xlim[0], (int, float)):
@@ -291,7 +323,7 @@ def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=None,
         elif len(xlim) != len(arrs):
             raise ValueError('Incorrect format for xbounds.')
         else:
-            set_xlim = xlim[ix]
+            set_xlim = xlim[i]
 
         if ylim is None:
             set_ylim = (len(result)+100, -100)
@@ -300,12 +332,12 @@ def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=None,
         elif len(ylim) != len(arrs):
             raise ValueError('Incorrect format for ybounds.')
         else:
-            set_ylim = ylim[ix]
+            set_ylim = ylim[i]
 
-        ax[ix].set_ylim(set_ylim)
-        ax[ix].set_xlim(set_xlim)
-        ax[ix].set_xlabel('Maxamp/Amp')
-        ax[ix].set_ylabel('Time')
+        ax[1, i].set_ylim(set_ylim)
+        ax[1, i].set_xlim(set_xlim)
+        ax[1, i].set_xlabel('Maxamp/Amp')
+        ax[1, i].set_ylabel('Time')
 
     if save_to is not None:
         plt.savefig(save_to, dpi=dpi)
@@ -360,19 +392,21 @@ def statistics_plot(arrs, stats, rate=None, figsize=None, names=None,
 
     _, ax = plt.subplots(2, len(arrs), figsize=figsize, squeeze=False)
     for i, arr in enumerate(arrs):
+        setup_imshow(ax[0, i], arr.T, **kwargs)
+
         for k in stats:
             if isinstance(k, str):
                 func, label = statistics_zoo[k], k
             else:
                 func, label = k, k.__name__
 
-            ax[0, i].plot(func(arr, rate), label=label)
+            ax[1, i].plot(func(arr, rate), label=label)
 
-        ax[0, i].legend()
-        ax[0, i].set_xlim([0, len(arr)])
-        ax[0, i].set_aspect('auto')
-        ax[0, i].set_title(names[i] if names is not None else '')
-        setup_imshow(ax[1, i], arr.T, **kwargs)
+        ax[1, i].legend()
+        ax[1, i].set_xlim([0, len(arr)])
+        ax[1, i].set_aspect('auto')
+        ax[1, i].set_title(names[i] if names is not None else '')
+        ax[1, i].set_title('Statisticks  {}'.format(names[i] if names is not None else ''))
 
     if save_to is not None:
         plt.savefig(save_to, dpi=dpi)

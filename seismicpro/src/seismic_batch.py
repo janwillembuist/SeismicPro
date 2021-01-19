@@ -1511,7 +1511,7 @@ class SeismicBatch(Batch):
         ----------
         src : str or array of str
             The batch component(s) with data to show.
-        pos : int, default 0
+        pos : int of array-like, default 0
             Position of the object in the batch to show.
         wiggle : bool, default to False
             Show traces in a wiggle form.
@@ -1550,7 +1550,6 @@ class SeismicBatch(Batch):
             src = (src, )
         if isinstance(pos, int):
             pos = (pos, )
-        
 
         arrs = np.empty((len(pos), len(src)), 'O')
         for j, ipos in enumerate(pos):
@@ -1565,7 +1564,7 @@ class SeismicBatch(Batch):
             for j, ipos in enumerate(pos):
                 for i, isrc in enumerate(attribute_plot):
                     attribute[j, i] = getattr(self, isrc)[ipos]
-            attribute = np.broadcast_to(attribute, arrs.shape)
+            #attribute = np.broadcast_to(attribute, arrs.shape)
         else:
             attribute = None
 
@@ -1577,15 +1576,15 @@ class SeismicBatch(Batch):
             pts = np.empty((len(pos), len(src_picking)), 'O')
             for j, ipos in enumerate(pos):
                 for i, isrc in enumerate(src_picking):
-                    pts[j, i] = getattr(self, isrc)[ipos] / rate
+                    pts[j, i] = getattr(self, isrc)[ipos] #/ rate
     
-            if plot_single:
-                pts_copy = np.array(pts)
-                for i in range(pts.shape[0]):
-                    for j in range(pts.shape[1]):
-                        pts[i, j] = pts_copy[i, :]
+            # if plot_single:
+            #     pts_copy = np.array(pts)
+            #     for i in range(pts.shape[0]):
+            #         for j in range(pts.shape[1]):
+            #             pts[i, j] = pts_copy[i, :]
                 
-            pts = pts.flatten()
+            #pts = pts.flatten()
 
         else:
             pts = None
@@ -1674,13 +1673,15 @@ class SeismicBatch(Batch):
                      dpi=dpi, title=title, **kwargs)
         return self
 
-    def gain_plot(self, src, index, window=51, xlim=None, ylim=None,
+    def gain_plot(self, src, pos=0, window=51, xlim=None, ylim=None,
                   figsize=(10, 7), names=None,  save_to=None, dpi=None, **kwargs):
         """Gain's graph plots the ratio of the maximum mean value of
         the amplitude to the mean value of the amplitude at the moment t.
 
         Parameters
         ----------
+        pos : int, default 0
+            Position of the object in the batch to show.
         window : int, default 51
             Size of smoothing window of the median filter.
         xlim : tuple or list with size 2
@@ -1696,14 +1697,13 @@ class SeismicBatch(Batch):
         -------
         Gain's plot.
         """
-        _ = kwargs
-        pos = self.index.get_pos(index)
-        src = (src, ) if isinstance(src, str) else src
-        sample = [getattr(self, source)[pos] for source in src]
-        gain_plot(sample, window, xlim, ylim, figsize, names, **kwargs)
+        if isinstance(src, str):
+            src = (src, )
+        arrs = [getattr(self, source)[pos] for source in src]
+        gain_plot(arrs, window, xlim, ylim, figsize, names, **kwargs)
         return self
 
-    def spectrum_plot(self, src, index, frame, max_freq=None,
+    def spectrum_plot(self, src, pos=0, frame=None, max_freq=None,
                       figsize=(10, 10), save_to=None, dpi=None, **kwargs):
         """Plot seismogram(s) and power spectrum of given region in the seismogram(s).
 
@@ -1711,8 +1711,8 @@ class SeismicBatch(Batch):
         ----------
         src : str or array of str
             The batch component(s) with data to show.
-        index : same type as batch.indices
-            Data index to show.
+        pos : int, default 0
+            Position of the object in the batch to show.
         frame : tuple
             List of slices that frame region of interest.
         max_freq : scalar
@@ -1728,18 +1728,16 @@ class SeismicBatch(Batch):
         -------
         Plot of seismogram(s) and power spectrum(s).
         """
-        pos = self.index.get_pos(index)
-        if len(np.atleast_1d(src)) == 1:
+        if isinstance(src, str):
             src = (src,)
-
         arrs = [getattr(self, isrc)[pos] for isrc in src]
-        names = [' '.join([i, str(index)]) for i in src]
+        names = [' '.join([i, str(self.indices[pos])]) for i in src]
         rate = self.meta[src[0]]['interval'] / 1e6
         spectrum_plot(arrs=arrs, frame=frame, rate=rate, max_freq=max_freq,
                       names=names, figsize=figsize, save_to=save_to, dpi=dpi, **kwargs)
         return self
 
-    def statistics_plot(self, src, index, stats, figsize=(10, 10), 
+    def statistics_plot(self, src, pos=0, stats=None, figsize=(10, 10), 
                         save_to=None, dpi=None, **kwargs):
         """Plot seismogram(s) and various trace statistics.
 
@@ -1762,12 +1760,11 @@ class SeismicBatch(Batch):
         -------
         Plot of seismogram(s) and power spectrum(s).
         """
-        pos = self.index.get_pos(index)
-        if len(np.atleast_1d(src)) == 1:
+        if isinstance(src, str):
             src = (src,)
 
         arrs = [getattr(self, isrc)[pos] for isrc in src]
-        names = [' '.join([i, str(index)]) for i in src]
+        names = [' '.join([i, str(self.indices[pos])]) for i in src]
         rate = self.meta[src[0]]['interval'] / 1e6
         statistics_plot(arrs=arrs, stats=stats, rate=rate, names=names, figsize=figsize,
                         save_to=save_to, dpi=dpi, **kwargs)
