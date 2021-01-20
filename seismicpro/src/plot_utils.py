@@ -58,23 +58,23 @@ def scatter_within(ax, points, **scatter_within_kwargs):
     for ipts in points:
         ax.scatter(range(len(ipts)), ipts, **scatter_within_kwargs)
 
-def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-branches, too-many-arguments
-                 pts=None, s=None, scatter_color=None, names=None, figsize=(7, 4),
-                 save_to=None, dpi=None, line_color=None, title=None, 
-                 columnwise=False, unite_points=False, 
-                 attribute=None, x_ticker={}, y_ticker={},  **kwargs):
+def seismic_plot(arrs, xlim=None, ylim=None, wiggle=False, std=1, # pylint: disable=too-many-branches, too-many-arguments
+                 event=None, s=None, c=None, attribute=None,  
+                 figsize=(9, 6), columnwise=False, title=None, line_color=None, names=None,  
+                 x_ticker={}, y_ticker={},
+                 save_to=None, dpi=None,  **kwargs):
     """Plot seismic traces.
 
     Parameters
     ----------
     arrs : array-like
         Arrays of seismic traces to plot.
-    wiggle : bool, default to False
-        Show traces in a wiggle form.
     xlim : tuple, optional
         Range in x-axis to show.
     ylim : tuple, optional
         Range in y-axis to show.
+    wiggle : bool, default to False
+        Show traces in a wiggle form.
     std : scalar, optional
         Amplitude scale for traces in wiggle form.
     pts : array_like, shape (n, )
@@ -87,6 +87,8 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
         Title names to identify subplots.
     figsize : array-like, optional
         Output plot size.
+    columnwise: bool, default is False.
+        Whether to plot multiple gathers as column or row.
     save_to : str or None, optional
         If not None, save plot to given path.
     dpi : int, optional, default: None
@@ -122,7 +124,7 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
 
     def infer_array(cond, arrs, transpose=False, broadcast_to=None, unite_points=False):
         if arrs is None:
-            return arrs
+            return None 
     
         if cond(arrs): # arrs is a single seismogramm i.e. 2darray, wrap it with another array with dtype='O' 
             blank = np.empty((1, 1), 'O')
@@ -142,16 +144,16 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
 
         return blank
 
-    blank = infer_array(is_2d_array, arrs, columnwise)
+    arrs = infer_array(is_2d_array, arrs, columnwise)
     att = infer_array(is_1d_array, attribute, columnwise)
-    pts = infer_array(is_1d_array, pts,       columnwise)
-    if pts is not None and pts.shape > blank.shape:
-        #pts = infer_array(scalar_2d, pts if columnwise else pts.T, not columnwise)
+    pts = infer_array(is_1d_array, event,       columnwise)
+    if pts is not None and pts.shape > arrs.shape:
         pts = infer_array(is_2d_array, pts)
-    
-    fig, ax = plt.subplots(*blank.shape, figsize=figsize, squeeze=False)
 
-    for i, (arr, ax) in enumerate(zip(blank.flatten(), ax.flatten())):
+    figsize = figsize * np.array(arrs.shape)[::-1]
+    fig, ax = plt.subplots(*arrs.shape, figsize=figsize, squeeze=False)
+
+    for i, (arr, ax) in enumerate(zip(arrs.flatten(), ax.flatten())):
 
         # if not wiggle:
         #     arr = np.squeeze(arr)
@@ -192,8 +194,8 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
         else:
             raise ValueError('Invalid ndim to plot data.')
 
-        # if names is not None:
-        #     ax.set_title(names[i])
+        if names is not None:
+            ax.set_title(names[i])
 
         if arr.ndim == 2:
             ax.set_ylim([ylim_curr[1], ylim_curr[0]])
