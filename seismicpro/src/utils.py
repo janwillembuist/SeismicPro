@@ -810,7 +810,6 @@ def infer_axis_tickers(batch, index, src, x_tick, y_tick):
         else:
             xticks_labels = df[x_tick]
         x_ticker['formatter'] = IndexFormatter(xticks_labels)
-
     elif isinstance(x_tick, dict): # dict with config passed, it will be used directly
         x_ticker = x_tick
     elif isinstance(x_tick, (list, tuple, np.ndarray)): # ticker will be inferred later in utils.setup_tickers
@@ -820,14 +819,27 @@ def infer_axis_tickers(batch, index, src, x_tick, y_tick):
     if y_tick == 'time': # infer ticker from meta
         yticks_labels = batch.meta[src]['samples']
         y_ticker['formatter'] = IndexFormatter(yticks_labels)
-
-    elif y_ticker == 'samples': # default ticker will be used
+    elif y_tick == 'samples': # default ticker will be used
         pass 
-
     elif isinstance(y_tick, dict): 
         y_ticker = y_tick
-    
     elif isinstance(x_tick, (list, tuple, np.ndarray)): # ticker will be inferred later in utils.setup_tickers
-        y_ticker = x_tick
+        y_ticker = y_tick
     
     return x_ticker, y_ticker
+
+def collect_components_data(batch, src, pos):
+    if src[0] is None:
+        return None        
+    data = np.empty((len(pos), len(src)), 'O')
+    for j, ipos in enumerate(pos):
+        for i, isrc in enumerate(src):
+            data[j, i] = getattr(batch, isrc)[ipos]
+    return data
+
+def to_list(obj):
+    """Cast an object to a list. Almost identical to `list(obj)` for 1-D
+    objects, except for `str`, which won't be split into separate letters but
+    transformed into a list of a single element.
+    """
+    return np.ravel(obj).tolist()

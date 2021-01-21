@@ -7,7 +7,7 @@ from matplotlib.ticker import ScalarFormatter, AutoLocator, IndexFormatter, Line
 from matplotlib import patches, colors as mcolors
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from .utils import measure_gain_amplitude
+from .utils import measure_gain_amplitude, to_list, collect_components_data
 
 
 def setup_imshow(ax, arr, **kwargs):
@@ -51,24 +51,48 @@ def scatter_on_top(ax, attribute):
     top_subax.set_xticks([])
     top_subax.yaxis.tick_right()
 
-def scatter_within(ax, points, **scatter_within_kwargs):
+def scatter_within(ax, points, **kwargs):
     if np.isscalar(points[0]):
         points = (points, )
-
     for ipts in points:
-        ax.scatter(range(len(ipts)), ipts, **scatter_within_kwargs)
+        ax.scatter(range(len(ipts)), ipts, **kwargs)
+
+def is_2d_array(array):
+    return np.isscalar(array[0][0])
+
+def is_1d_array(array):
+    return np.isscalar(array[0])
+
+def infer_array(arrs, cond):
+    if arrs is None:
+        return None 
+
+    if cond(arrs): # arrs is a single seismogramm i.e. 2darray, wrap it with another array with dtype='O' 
+        blank = np.empty((1, 1), 'O')
+        blank[0, 0] = arrs
+    elif cond(arrs[0]):
+        blank = np.empty((1, len(arrs)), 'O')
+        for i, _ in enumerate(arrs):
+            blank[0, i] = arrs[i]
+    elif cond(arrs[0][0]):
+        blank = np.empty((len(arrs), len(arrs[0])), 'O')
+        for i, _ in enumerate(arrs):
+            for j, _ in enumerate(arrs[0]):
+                blank[i, j] = arrs[i][j]
+    
+    return blank#.flatten()
 
 def seismic_plot(arrs, xlim=None, ylim=None, wiggle=False, std=1, # pylint: disable=too-many-branches, too-many-arguments
                  event=None, s=None, c=None, attribute=None,  
-                 figsize=(9, 6), columnwise=False, title=None, line_color=None, names=None,  
+                 figsize=(9, 6), columnwise=True, title=None, line_color='k', names=None,  
                  x_ticker={}, y_ticker={},
                  save_to=None, dpi=None,  **kwargs):
     """Plot seismic traces.
 
     Parameters
     ----------
-    arrs : array-like
-        Arrays of seismic traces to plot.
+    arrs : np.2darray, or iterable or iterable of iterables of such arrays 
+        Containers with seismic gathers to plot.
     xlim : tuple, optional
         Range in x-axis to show.
     ylim : tuple, optional
@@ -77,12 +101,15 @@ def seismic_plot(arrs, xlim=None, ylim=None, wiggle=False, std=1, # pylint: disa
         Show traces in a wiggle form.
     std : scalar, optional
         Amplitude scale for traces in wiggle form.
-    pts : array_like, shape (n, )
-        The points data positions.
-    s : scalar or array_like, shape (n, ), optional
-        The marker size in points**2.
-    scatter_color : color, sequence, or sequence of color, optional
-        The marker color.
+    event : array or iterable of such arrays
+        Data corresponding to events, happened on the trace. Measured in samples. 
+        Plotted within the gather. For example first break picking.
+    s : scalar or array_like
+        The marker size for the events
+    c : color, sequence, or sequence of color
+        The marker color for the events.
+    attribute: array or iterable of such arrays
+        Data with the trace's attribute. Plotted on top of the gather. For example, offset or elevation. 
     names : str or array-like, optional
         Title names to identify subplots.
     figsize : array-like, optional
@@ -93,7 +120,7 @@ def seismic_plot(arrs, xlim=None, ylim=None, wiggle=False, std=1, # pylint: disa
         If not None, save plot to given path.
     dpi : int, optional, default: None
         The resolution argument for matplotlib.pyplot.savefig.
-    line_color : color, sequence, or sequence of color, optional, default: None
+    line_color : color, sequence, or sequence of color, optional, default is 'k'
         The trace color.
     title : str
         Plot title.
@@ -107,56 +134,28 @@ def seismic_plot(arrs, xlim=None, ylim=None, wiggle=False, std=1, # pylint: disa
     Raises
     ------
     ValueError
-        If ```trace_col``` is sequence and it lenght is not equal to the number of traces.
-        If dimensions of given ```arrs``` not in [1, 2].
+        If ```line_color``` is sequence and it length is not equal to the number of traces.
 
     """
-    if isinstance(names, str):
-        names = (names,)
+    arrs, attribute, event = [infer_array(data, condition) for data, condition in zip([arrs,    attribute,       event],
+                                                                                [is_2d_array, is_1d_array, is_1d_array])]
 
-    line_color = 'k' if line_color is None else line_color
-
-    def is_2d_array(array):
-        return np.isscalar(array[0][0])
+    names = to_list(names)
+    if len(names) < arrs.size:
+        names *= arrs.size
     
-    def is_1d_array(array):
-        return np.isscalar(array[0])
-
-    def infer_array(cond, arrs, transpose=False, broadcast_to=None, unite_points=False):
-        if arrs is None:
-            return None 
+    if event is not None:
+        if event.shape > arrs.shape:
+            event = infer_array(event.T, is_2d_array)
     
-        if cond(arrs): # arrs is a single seismogramm i.e. 2darray, wrap it with another array with dtype='O' 
-            blank = np.empty((1, 1), 'O')
-            blank[0, 0] = arrs
-        elif cond(arrs[0]):
-            blank = np.empty((1, len(arrs)), 'O')
-            for i, _ in enumerate(arrs):
-                blank[0, i] = arrs[i]
-        elif cond(arrs[0][0]):
-            blank = np.empty((len(arrs), len(arrs[0])), 'O')
-            for i, _ in enumerate(arrs):
-                for j, _ in enumerate(arrs[0]):
-                    blank[i, j] = arrs[i][j]
-        
-        if transpose: blank = blank.T
-        if broadcast_to: blank = np.broadcast_to(blank, broadcast_to)
-
-        return blank
-
-    arrs = infer_array(is_2d_array, arrs, columnwise)
-    att = infer_array(is_1d_array, attribute, columnwise)
-    pts = infer_array(is_1d_array, event,       columnwise)
-    if pts is not None and pts.shape > arrs.shape:
-        pts = infer_array(is_2d_array, pts)
-
-    figsize = figsize * np.array(arrs.shape)[::-1]
-    fig, ax = plt.subplots(*arrs.shape, figsize=figsize, squeeze=False)
+    nrows, ncols = arrs.shape if not columnwise else arrs.shape[::-1]
+    fig, ax = plt.subplots(nrows, ncols, figsize=figsize * np.array([ncols, nrows]), squeeze=False)
+    ax = ax if not columnwise else ax.T
 
     for i, (arr, ax) in enumerate(zip(arrs.flatten(), ax.flatten())):
 
-        # if not wiggle:
-        #     arr = np.squeeze(arr)
+        if not wiggle:
+            arr = np.squeeze(arr)
         xlim_curr = xlim or (0, len(arr))
 
         if arr.ndim == 2:
@@ -184,10 +183,10 @@ def seismic_plot(arrs, xlim=None, ylim=None, wiggle=False, std=1, # pylint: disa
                 setup_imshow(ax, arr.T, **kwargs)
         
             if attribute is not None:
-                scatter_on_top(ax, att.flatten()[i])
+                scatter_on_top(ax, attribute.flatten()[i])
 
-            if pts is not None:
-                scatter_within(ax, pts.flatten()[i])
+            if event is not None:
+                scatter_within(ax, event.flatten()[i], c=c, s=s)
 
         elif arr.ndim == 1:
             ax.plot(arr, **kwargs)
@@ -199,7 +198,7 @@ def seismic_plot(arrs, xlim=None, ylim=None, wiggle=False, std=1, # pylint: disa
 
         if arr.ndim == 2:
             ax.set_ylim([ylim_curr[1], ylim_curr[0]])
-            if (not wiggle) or (pts is not None):
+            if (not wiggle) or (event is not None):
                 ax.set_xlim(xlim_curr)
 
         if arr.ndim == 1:
@@ -240,22 +239,20 @@ def spectrum_plot(arrs, frame, rate, max_freq=None, names=None,
     -------
     Plot of seismogram(s) and power spectrum(s).
     """
-    if isinstance(arrs, np.ndarray) and arrs.ndim == 2:
-        arrs = (arrs,)
+    names = to_list(names)
+    arrs = infer_array(arrs, is_2d_array)
 
-    if isinstance(names, str):
-        names = (names,)
-
-    _, ax = plt.subplots(2, len(arrs), figsize=figsize, squeeze=False)
-    for i, arr in enumerate(arrs):
+    _, ax = plt.subplots(2, arrs.shape[1], figsize=figsize * np.array([arrs.shape[1], 2]), squeeze=False)
+    for i, arr in enumerate(arrs.flatten()):
         setup_imshow(ax[0, i], arr.T, **kwargs)
         rect = patches.Rectangle((frame[0].start, frame[1].start),
                                  frame[0].stop - frame[0].start,
                                  frame[1].stop - frame[1].start,
                                  edgecolor='r', facecolor='none', lw=2)
+
+        ax[0, i].set_title(names[i])
         ax[0, i].add_patch(rect)
-        ax[0, i].set_title('Seismogram {}'.format(names[i] if names
-                                                  is not None else ''))
+        ax[0, i].set_title(names[i])
         ax[0, i].set_aspect('auto')
         spec = abs(np.fft.rfft(arr[frame], axis=1))**2
         freqs = np.fft.rfftfreq(len(arr[frame][0]), d=rate)
@@ -272,7 +269,7 @@ def spectrum_plot(arrs, frame, rate, max_freq=None, names=None,
 
     plt.show()
 
-def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=None, 
+def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=(8, ), 
               names=None, dpi=None, save_to=None, **kwargs):# pylint: disable=too-many-branches
     r"""Gain's graph plots the ratio of the maximum mean value of
     the amplitude to the mean value of the smoothed amplitude at the moment t.
@@ -289,7 +286,7 @@ def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=None,
 
     Parameters
     ----------
-    sample : array-like
+    arrs : array-like
         Seismogram.
     window : int, default 51
         Size of smoothing window of the median filter.
@@ -306,18 +303,17 @@ def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=None,
     -------
     Gain's plot.
     """
-    if isinstance(arrs, np.ndarray) and arrs.ndim == 2:
-        arrs = (arrs,)
+    names = to_list(names)
+    arrs = infer_array(arrs, is_2d_array)
 
-    _, ax = plt.subplots(2, len(arrs), figsize=figsize, squeeze=False)
+    _, ax = plt.subplots(2, arrs.shape[1], figsize=figsize * np.array([arrs.shape[1], 2]), squeeze=False)
     
-    for i, arr in enumerate(arrs):
+    for i, arr in enumerate(arrs.flatten()):
         setup_imshow(ax[0, i], arr.T, **kwargs)
+        ax[0, i].set_title(names[i])
 
         result = measure_gain_amplitude(arr, window)
         ax[1, i].plot(result, range(len(result)), **kwargs)
-        if names is not None:
-            ax[1, x].set_title(names[i])
         if xlim is None:
             set_xlim = (max(result)-min(result)*.1, max(result)+min(result)*1.1)
         elif isinstance(xlim[0], (int, float)):
@@ -340,6 +336,7 @@ def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=None,
         ax[1, i].set_xlim(set_xlim)
         ax[1, i].set_xlabel('Maxamp/Amp')
         ax[1, i].set_ylabel('Time')
+        ax[1, i].set_title('Gain plot {}'.format(names[i] if names is not None else ''))
 
     if save_to is not None:
         plt.savefig(save_to, dpi=dpi)
@@ -383,18 +380,14 @@ def statistics_plot(arrs, stats, rate=None, figsize=None, names=None,
                           std_ampl=lambda x, *args: np.std(x, axis=1),
                           rms_freq=rms_freq)
 
-    if isinstance(arrs, np.ndarray) and arrs.ndim == 2:
-        arrs = (arrs,)
 
-    if isinstance(stats, str) or callable(stats):
-        stats = (stats,)
+    names, stats = [to_list(obj) for obj in [names, stats]]
+    arrs = infer_array(arrs, is_2d_array) 
 
-    if isinstance(names, str):
-        names = (names,)
-
-    _, ax = plt.subplots(2, len(arrs), figsize=figsize, squeeze=False)
-    for i, arr in enumerate(arrs):
+    _, ax = plt.subplots(2, arrs.shape[1], figsize=figsize * np.array([arrs.shape[1], 2]), squeeze=False)
+    for i, arr in enumerate(arrs.flatten()):
         setup_imshow(ax[0, i], arr.T, **kwargs)
+        ax[0, i].set_title(names[i])
 
         for k in stats:
             if isinstance(k, str):
