@@ -805,11 +805,11 @@ def collect_components_data(batch, src, pos):
             data[i, j] = getattr(batch, isrc)[ipos]
     return data
 
-def is_2d_array(array):
-    return np.isscalar(array[0][0])
-
 def is_1d_array(array):
     return np.isscalar(array[0])
+
+def is_2d_array(array):
+    return not is_1d_array(array) and np.isscalar(array[0][0])
 
 def infer_array(data, cond):
     """ Given the nested(max depth 2) structure of objects,  where the object is defined 
@@ -835,9 +835,9 @@ def infer_array(data, cond):
     return blank
 
 def to_list(obj, n=1):
-    """Cast an object to a list and repeat it n times. Almost identical to `list(obj)` for 1-D
+    """Cast an object to a list. Almost identical to `list(obj)` for 1-D
     objects, except for `str`, which won't be split into separate letters but
-    transformed into a list of a single element.
+    transformed into a list of a single element. Optionally list may be repeated n times.
     """
     return np.ravel(obj).tolist() * n
      
