@@ -1505,7 +1505,7 @@ class SeismicBatch(Batch):
     def seismic_plot(self, src, pos=0, # pylint: disable=too-many-arguments
                      xlim=None, ylim=None, wiggle=False, std=1,
                      src_event=None, s=None, c=None, src_attribute=None,
-                     figsize=(9, 6), title=None, line_color='k',
+                     figsize=(9, 6), title=None, line_color='k', names=None,
                      y_ticker='samples', x_ticker=None,
                      save_to=None, dpi=None, **kwargs):
         """Plot seismic traces.
@@ -1559,7 +1559,7 @@ class SeismicBatch(Batch):
 
         seismic_plot(arrs=arrs, xlim=xlim, ylim=ylim, wiggle=wiggle, std=std, 
                      event=event, s=s, c=c, attribute=attribute, 
-                     figsize=figsize, columnwise=False, line_color=line_color, title=title, names=names, 
+                     figsize=figsize, line_color=line_color, title=title, names=names, 
                      x_ticker=x_ticker, y_ticker=y_ticker, 
                      save_to=save_to, dpi=dpi, **kwargs)
         return self
@@ -1633,7 +1633,7 @@ class SeismicBatch(Batch):
 
         seismic_plot(arrs=arrs, wiggle=wiggle, std=std,
                      pts=pts_picking, s=s, scatter_color=scatter_color,
-                     figsize=figsize, names=names, save_to=save_to,
+                     figsize=figsize, columnwise=False, names=names, save_to=save_to,
                      dpi=dpi, title=title, **kwargs)
         return self
 
@@ -1664,6 +1664,7 @@ class SeismicBatch(Batch):
         src = to_list(src)
         arrs = [getattr(self, isrc)[pos] for isrc in src]
         names = names or [' '.join([i, str(self.indices[pos])]) for i in src]
+
         gain_plot(arrs, window, xlim, ylim, figsize, names, **kwargs)
         return self
 
@@ -1693,9 +1694,10 @@ class SeismicBatch(Batch):
         Plot of seismogram(s) and power spectrum(s).
         """
         src = to_list(src)
-        arrs = [getattr(self, isrc)[pos] for isrc in src]
+        arrs = collect_components_data(self, src, pos)
         names = [' '.join([i, str(self.indices[pos])]) for i in src]
         rate = self.meta[src[0]]['interval'] / 1e6
+
         spectrum_plot(arrs=arrs, frame=frame, rate=rate, max_freq=max_freq,
                       names=names, figsize=figsize, save_to=save_to, dpi=dpi, **kwargs)
         return self
@@ -1725,9 +1727,10 @@ class SeismicBatch(Batch):
         Plot of seismogram(s) and power spectrum(s).
         """
         src = to_list(src)
-        arrs = [getattr(self, isrc)[pos] for isrc in src]
+        arrs = collect_components_data(self, src, pos)
         names = [' '.join([isrc, str(self.indices[pos])]) for isrc in src]
         rate = self.meta[src[0]]['interval'] / 1e6
+    
         statistics_plot(arrs=arrs, stats=stats, rate=rate, names=names, figsize=figsize,
                         save_to=save_to, dpi=dpi, **kwargs)
         return self

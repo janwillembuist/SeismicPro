@@ -7,7 +7,7 @@ from matplotlib.ticker import ScalarFormatter, AutoLocator, IndexFormatter, Line
 from matplotlib import patches, colors as mcolors
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from .utils import measure_gain_amplitude, to_list, collect_components_data
+from .utils import measure_gain_amplitude, to_list, collect_components_data, is_1d_array, is_2d_array, infer_array
 
 
 def setup_imshow(ax, arr, **kwargs):
@@ -22,6 +22,41 @@ def setup_imshow(ax, arr, **kwargs):
     }
 
     ax.imshow(arr, **{**defaults, **kwargs})
+
+def infer_axis_tickers(batch, index, src, x_tick, y_tick):
+    """ In case x_ticker / y_ticker strings, corresponding tickers will be infered from dataframe / meta. 
+    In case x_ticker / y_ticker dicts, they should contains axis configuration and will be used as is. 
+    """    
+    df = batch.index.get_df(index)
+
+    x_ticker, y_ticker = {}, {}
+    
+    # process x-ticker
+    if isinstance(x_tick, str): # infer ticker from dataframe
+        sorting = batch.meta[src]['sorting']
+        if sorting is not None:
+            xticks_labels = df.sort_values(sorting)[x_tick]
+        else:
+            xticks_labels = df[x_tick]
+        x_ticker['formatter'] = IndexFormatter(xticks_labels)
+    elif isinstance(x_tick, dict): # dict with config passed, it will be used directly
+        x_ticker = x_tick
+    elif isinstance(x_tick, (list, tuple, np.ndarray)): # ticker will be inferred later in utils.setup_tickers
+        x_ticker = x_tick
+
+    # process y-ticker
+    if y_tick == 'time': # infer ticker from meta
+        yticks_labels = batch.meta[src]['samples']
+        yticks_labels = [int(i) if i.is_integer() else i for i in yticks_labels]  
+        y_ticker['formatter'] = IndexFormatter(yticks_labels)
+    elif y_tick == 'samples': # default ticker will be used
+        pass 
+    elif isinstance(y_tick, dict): 
+        y_ticker = y_tick
+    elif isinstance(x_tick, (list, tuple, np.ndarray)): # ticker will be inferred later in utils.setup_tickers
+        y_ticker = y_tick
+    
+    return x_ticker, y_ticker
 
 def setup_tickers(ax, x_ticker, y_ticker):
     """ Setup the x / y axis tickers from the configs. 
@@ -51,40 +86,16 @@ def scatter_on_top(ax, attribute):
     top_subax.set_xticks([])
     top_subax.yaxis.tick_right()
 
-def scatter_within(ax, points, **kwargs):
-    if np.isscalar(points[0]):
+def scatter_within(ax, points, c, s, **kwargs):
+    if is_1d_array(points):
         points = (points, )
-    for ipts in points:
-        ax.scatter(range(len(ipts)), ipts, **kwargs)
-
-def is_2d_array(array):
-    return np.isscalar(array[0][0])
-
-def is_1d_array(array):
-    return np.isscalar(array[0])
-
-def infer_array(arrs, cond):
-    if arrs is None:
-        return None 
-
-    if cond(arrs): # arrs is a single seismogramm i.e. 2darray, wrap it with another array with dtype='O' 
-        blank = np.empty((1, 1), 'O')
-        blank[0, 0] = arrs
-    elif cond(arrs[0]):
-        blank = np.empty((1, len(arrs)), 'O')
-        for i, _ in enumerate(arrs):
-            blank[0, i] = arrs[i]
-    elif cond(arrs[0][0]):
-        blank = np.empty((len(arrs), len(arrs[0])), 'O')
-        for i, _ in enumerate(arrs):
-            for j, _ in enumerate(arrs[0]):
-                blank[i, j] = arrs[i][j]
-    
-    return blank#.flatten()
+    c, s = [to_list(obj, len(points)) for obj in [c, s]]
+    for ix_pts, ix_c, ix_s in zip(points, c, s):
+        ax.scatter(range(len(ix_pts)), ix_pts, c=ix_c, s=ix_s, **kwargs)
 
 def seismic_plot(arrs, xlim=None, ylim=None, wiggle=False, std=1, # pylint: disable=too-many-branches, too-many-arguments
                  event=None, s=None, c=None, attribute=None,  
-                 figsize=(9, 6), columnwise=True, title=None, line_color='k', names=None,  
+                 figsize=(9, 6), columnwise=False, title=None, line_color='k', names=None,  
                  x_ticker={}, y_ticker={},
                  save_to=None, dpi=None,  **kwargs):
     """Plot seismic traces.
@@ -139,15 +150,18 @@ def seismic_plot(arrs, xlim=None, ylim=None, wiggle=False, std=1, # pylint: disa
     """
     arrs, attribute, event = [infer_array(data, condition) for data, condition in zip([arrs,    attribute,       event],
                                                                                 [is_2d_array, is_1d_array, is_1d_array])]
-
     names = to_list(names)
-    if len(names) < arrs.size:
-        names *= arrs.size
-    
+
+    # Implicitely rearange event array so it follows the logic.
+    # In case multiple types of events and gathers passed, e.g. event =  (picking1 and picking2) and arrs = (raw, lift) 
+    # then the events are splitted across gathers, i.e. picking1 plotted on raw and picking2 plotted on lift.
+    # In case event = (picking1, picking2) and arrs = raw, both picking1 and picking2 are plotted on the raw
     if event is not None:
-        if event.shape > arrs.shape:
+        if event.shape[0] > arrs.shape[0]:
             event = infer_array(event.T, is_2d_array)
-    
+        if event.shape[1] > arrs.shape[1]:
+            event = infer_array(event, is_2d_array)
+
     nrows, ncols = arrs.shape if not columnwise else arrs.shape[::-1]
     fig, ax = plt.subplots(nrows, ncols, figsize=figsize * np.array([ncols, nrows]), squeeze=False)
     ax = ax if not columnwise else ax.T
@@ -208,7 +222,7 @@ def seismic_plot(arrs, xlim=None, ylim=None, wiggle=False, std=1, # pylint: disa
         fig.suptitle(title)
 
     if save_to is not None:
-        plt.savefig(save_to, dpi=dpi)
+        plt.savefig(save_to, dpi=dpi, bbox_inches='tight')
 
     plt.show()
 
@@ -252,7 +266,6 @@ def spectrum_plot(arrs, frame, rate, max_freq=None, names=None,
 
         ax[0, i].set_title(names[i])
         ax[0, i].add_patch(rect)
-        ax[0, i].set_title(names[i])
         ax[0, i].set_aspect('auto')
         spec = abs(np.fft.rfft(arr[frame], axis=1))**2
         freqs = np.fft.rfftfreq(len(arr[frame][0]), d=rate)
@@ -265,7 +278,7 @@ def spectrum_plot(arrs, frame, rate, max_freq=None, names=None,
         ax[1, i].set_title('Spectrum plot {}'.format(names[i] if names is not None else ''))
 
     if save_to is not None:
-        plt.savefig(save_to, dpi=dpi)
+        plt.savefig(save_to, dpi=dpi, bbox_inches='tight')
 
     plt.show()
 
@@ -339,7 +352,7 @@ def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=(8, ),
         ax[1, i].set_title('Gain plot {}'.format(names[i] if names is not None else ''))
 
     if save_to is not None:
-        plt.savefig(save_to, dpi=dpi)
+        plt.savefig(save_to, dpi=dpi, bbox_inches='tight')
 
     plt.show()
 
@@ -400,11 +413,10 @@ def statistics_plot(arrs, stats, rate=None, figsize=None, names=None,
         ax[1, i].legend()
         ax[1, i].set_xlim([0, len(arr)])
         ax[1, i].set_aspect('auto')
-        ax[1, i].set_title(names[i] if names is not None else '')
         ax[1, i].set_title('Statisticks  {}'.format(names[i] if names is not None else ''))
 
     if save_to is not None:
-        plt.savefig(save_to, dpi=dpi)
+        plt.savefig(save_to, dpi=dpi, bbox_inches='tight')
 
     plt.show()
 
@@ -475,7 +487,7 @@ def show_1d_heatmap(idf, figsize=None, save_to=None, dpi=300, **kwargs):
     plt.ylabel("Line index")
     plt.axes().set_aspect('auto')
     if save_to is not None:
-        plt.savefig(save_to, dpi=dpi)
+        plt.savefig(save_to, dpi=dpi, bbox_inches='tight')
 
     plt.show()
 
