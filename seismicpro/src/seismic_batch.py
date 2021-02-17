@@ -15,9 +15,9 @@ from ..batchflow import action, inbatch_parallel, Batch, any_action_failed
 from .seismic_index import SegyFilesIndex, FieldIndex, KNNIndex, TraceIndex, CustomIndex
 
 from .utils import (FILE_DEPENDEND_COLUMNS, partialmethod, calculate_sdc_for_field, 
-                    massive_block, infer_axis_tickers, to_list, collect_components_data )
+                    massive_block, to_list, collect_components_data )
 from .file_utils import write_segy_file
-from .plot_utils import spectrum_plot, seismic_plot, statistics_plot, gain_plot
+from .plot_utils import spectrum_plot, seismic_plot, statistics_plot, gain_plot, infer_axis_tickers
 
 INDEX_UID = 'TRACE_SEQUENCE_FILE'
 

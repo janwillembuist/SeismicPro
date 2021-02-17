@@ -150,7 +150,7 @@ def seismic_plot(arrs, xlim=None, ylim=None, wiggle=False, std=1, # pylint: disa
     """
     arrs, attribute, event = [infer_array(data, condition) for data, condition in zip([arrs,    attribute,       event],
                                                                                 [is_2d_array, is_1d_array, is_1d_array])]
-    names = to_list(names)
+    names = to_list(names, arrs.size)
 
     # Implicitely rearange event array so it follows the logic.
     # In case multiple types of events and gathers passed, e.g. event =  (picking1 and picking2) and arrs = (raw, lift) 
