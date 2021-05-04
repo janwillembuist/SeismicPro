@@ -5,8 +5,9 @@ import matplotlib.pyplot as plt
 from matplotlib import patches
 from matplotlib.ticker import ScalarFormatter, AutoLocator, IndexFormatter, LinearLocator, FixedFormatter
 from matplotlib import patches, colors as mcolors
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-from .utils import measure_gain_amplitude
+from .utils import measure_gain_amplitude, to_list, collect_components_data, is_1d_array, is_2d_array, infer_array
 
 
 def setup_imshow(ax, arr, **kwargs):
@@ -21,6 +22,41 @@ def setup_imshow(ax, arr, **kwargs):
     }
 
     ax.imshow(arr, **{**defaults, **kwargs})
+
+def infer_axis_tickers(batch, index, src, x_tick, y_tick):
+    """ In case x_ticker / y_ticker strings, corresponding tickers will be infered from dataframe / meta. 
+    In case x_ticker / y_ticker dicts, they should contains axis configuration and will be used as is. 
+    """    
+    df = batch.index.get_df(index)
+
+    x_ticker, y_ticker = {}, {}
+    
+    # process x-ticker
+    if isinstance(x_tick, str): # infer ticker from dataframe
+        sorting = batch.meta[src]['sorting']
+        if sorting is not None:
+            xticks_labels = df.sort_values(sorting)[x_tick]
+        else:
+            xticks_labels = df[x_tick]
+        x_ticker['formatter'] = IndexFormatter(xticks_labels)
+    elif isinstance(x_tick, dict): # dict with config passed, it will be used directly
+        x_ticker = x_tick
+    elif isinstance(x_tick, (list, tuple, np.ndarray)): # ticker will be inferred later in utils.setup_tickers
+        x_ticker = x_tick
+
+    # process y-ticker
+    if y_tick == 'time': # infer ticker from meta
+        yticks_labels = batch.meta[src]['samples']
+        yticks_labels = [int(i) if i.is_integer() else i for i in yticks_labels]  
+        y_ticker['formatter'] = IndexFormatter(yticks_labels)
+    elif y_tick == 'samples': # default ticker will be used
+        pass 
+    elif isinstance(y_tick, dict): 
+        y_ticker = y_tick
+    elif isinstance(x_tick, (list, tuple, np.ndarray)): # ticker will be inferred later in utils.setup_tickers
+        y_ticker = y_tick
+    
+    return x_ticker, y_ticker
 
 def setup_tickers(ax, x_ticker, y_ticker):
     """ Setup the x / y axis tickers from the configs. 
@@ -41,38 +77,61 @@ def setup_tickers(ax, x_ticker, y_ticker):
     ax.xaxis.set_major_formatter(x_ticker.get('formatter', ScalarFormatter()))
     ax.yaxis.set_major_formatter(y_ticker.get('formatter', ScalarFormatter()))
 
-def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-branches, too-many-arguments
-                 pts=None, s=None, scatter_color=None, names=None, figsize=(10, 7),
-                 save_to=None, dpi=None, line_color=None, title=None, x_ticker={}, y_ticker={},  **kwargs):
+def scatter_on_top(ax, attribute):
+    """" Plot additional scatter on top of the 'ax' axes.  """
+    divider = make_axes_locatable(ax)
+    top_subax = divider.append_axes("top", 0.65, pad=0.01,  sharex=ax)
+    top_subax.scatter(range(len(attribute)), attribute, s=5, c='k')
+    top_subax.invert_yaxis()
+    top_subax.set_xticks([])
+    top_subax.yaxis.tick_right()
+
+def scatter_within(ax, points, c, s, **kwargs):
+    if is_1d_array(points):
+        points = (points, )
+    c, s = [to_list(obj, len(points)) for obj in [c, s]]
+    for ix_pts, ix_c, ix_s in zip(points, c, s):
+        ax.scatter(range(len(ix_pts)), ix_pts, c=ix_c, s=ix_s, **kwargs)
+
+def seismic_plot(arrs, xlim=None, ylim=None, wiggle=False, std=1, # pylint: disable=too-many-branches, too-many-arguments
+                 event=None, s=None, c=None, attribute=None,  
+                 figsize=(9, 6), columnwise=False, title=None, line_color='k', names=None,  
+                 x_ticker={}, y_ticker={},
+                 save_to=None, dpi=None,  **kwargs):
     """Plot seismic traces.
 
     Parameters
     ----------
-    arrs : array-like
-        Arrays of seismic traces to plot.
-    wiggle : bool, default to False
-        Show traces in a wiggle form.
+    arrs : np.2darray, or iterable or iterable of iterables of such arrays 
+        Containers with seismic gathers to plot.
     xlim : tuple, optional
         Range in x-axis to show.
     ylim : tuple, optional
         Range in y-axis to show.
+    wiggle : bool, default to False
+        Show traces in a wiggle form.
     std : scalar, optional
         Amplitude scale for traces in wiggle form.
-    pts : array_like, shape (n, )
-        The points data positions.
-    s : scalar or array_like, shape (n, ), optional
-        The marker size in points**2.
-    scatter_color : color, sequence, or sequence of color, optional
-        The marker color.
+    event : array or iterable of such arrays
+        Data corresponding to events, happened on the trace. Measured in samples. 
+        Plotted within the gather. For example first break picking.
+    s : scalar or array_like
+        The marker size for the events
+    c : color, sequence, or sequence of color
+        The marker color for the events.
+    attribute: array or iterable of such arrays
+        Data with the trace's attribute. Plotted on top of the gather. For example, offset or elevation. 
     names : str or array-like, optional
         Title names to identify subplots.
     figsize : array-like, optional
         Output plot size.
+    columnwise: bool, default is False.
+        Whether to plot multiple gathers as column or row.
     save_to : str or None, optional
         If not None, save plot to given path.
     dpi : int, optional, default: None
         The resolution argument for matplotlib.pyplot.savefig.
-    line_color : color, sequence, or sequence of color, optional, default: None
+    line_color : color, sequence, or sequence of color, optional, default is 'k'
         The trace color.
     title : str
         Plot title.
@@ -86,40 +145,35 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
     Raises
     ------
     ValueError
-        If ```trace_col``` is sequence and it lenght is not equal to the number of traces.
-        If dimensions of given ```arrs``` not in [1, 2].
+        If ```line_color``` is sequence and it length is not equal to the number of traces.
 
     """
-    if isinstance(arrs, np.ndarray) and arrs.ndim == 2:
-        arrs = (arrs,)
+    arrs, attribute, event = [infer_array(data, condition) for data, condition in zip([arrs,    attribute,       event],
+                                                                                [is_2d_array, is_1d_array, is_1d_array])]
+    names = to_list(names)
 
-    if isinstance(names, str):
-        names = (names,)
+    # Implicitely rearange event array so it follows the logic.
+    # In case multiple types of events and gathers passed, e.g. event =  (picking1 and picking2) and arrs = (raw, lift) 
+    # then the events are splitted across gathers, i.e. picking1 plotted on raw and picking2 plotted on lift.
+    # In case event = (picking1, picking2) and arrs = raw, both picking1 and picking2 are plotted on the raw
+    if event is not None:
+        if event.shape[0] > arrs.shape[0]:
+            event = infer_array(event.T, is_2d_array)
+        if event.shape[1] > arrs.shape[1]:
+            event = infer_array(event, is_2d_array)
 
-    line_color = 'k' if line_color is None else line_color
-    fig, ax = plt.subplots(1, len(arrs), figsize=figsize, squeeze=False)
-    # grid = plt.GridSpec(4 * len(arrs), 4, hspace=0.2, wspace=0.2)
-    # fig = plt.figure(figsize=figsize)
-    # ax = np.empty((len(arrs), 1), dtype='object')
-    # ax[0, 0] = fig.add_subplot(grid[:-1, 1:])
-    attribute, ratio = kwargs.pop('plot_attribute'), kwargs.pop('ratio', 1)
-    for i, arr in enumerate(arrs):
+    nrows, ncols = arrs.shape if not columnwise else arrs.shape[::-1]
+    fig, ax = plt.subplots(nrows, ncols, figsize=figsize * np.array([ncols, nrows]), squeeze=False)
+    ax = ax if not columnwise else ax.T
+
+    for i, (arr, ax) in enumerate(zip(arrs.flatten(), ax.flatten())):
 
         if not wiggle:
             arr = np.squeeze(arr)
-
         xlim_curr = xlim or (0, len(arr))
 
         if arr.ndim == 2:
-            setup_tickers(ax[0, i], x_ticker, y_ticker)
-
-            from mpl_toolkits.axes_grid1 import make_axes_locatable
-            divider = make_axes_locatable(ax[0, i])
-            ax_attr = divider.append_axes("top", ratio, pad=0.0, sharex=ax[0, i])
-            ax_attr.scatter(range(len(attribute[i])), attribute[i], s=5, c='k')
-            ax_attr.invert_yaxis()
-            ax_attr.set_xticks([])
-            ax_attr.yaxis.tick_right()
+            setup_tickers(ax, x_ticker, y_ticker)
 
             ylim_curr = ylim or (0, len(arr[0]))
 
@@ -136,36 +190,39 @@ def seismic_plot(arrs, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disa
                 for ix, k in enumerate(offsets):
                     x = k + std * arr[k, slice(*ylim_curr)] / np.std(arr)
                     col = line_color[ix]
-                    ax[0, i].plot(x, y, '{}-'.format(col))
-                    ax[0, i].fill_betweenx(y, k, x, where=(x > k), color=col)
+                    ax.plot(x, y, '{}-'.format(col))
+                    ax.fill_betweenx(y, k, x, where=(x > k), color=col)
 
             else:
-                setup_imshow(ax[0, i], arr.T, **kwargs)
+                setup_imshow(ax, arr.T, **kwargs)
+        
+            if attribute is not None:
+                scatter_on_top(ax, attribute.flatten()[i])
+
+            if event is not None:
+                scatter_within(ax, event.flatten()[i], c=c, s=s)
 
         elif arr.ndim == 1:
-            ax[0, i].plot(arr, **kwargs)
+            ax.plot(arr, **kwargs)
         else:
             raise ValueError('Invalid ndim to plot data.')
 
-        # if names is not None:
-        #     ax[0, i].set_title(names[i])
+        if names is not None:
+            ax.set_title(names[i])
 
         if arr.ndim == 2:
-            ax[0, i].set_ylim([ylim_curr[1], ylim_curr[0]])
-            if (not wiggle) or (pts is not None):
-                ax[0, i].set_xlim(xlim_curr)
+            ax.set_ylim([ylim_curr[1], ylim_curr[0]])
+            if (not wiggle) or (event is not None):
+                ax.set_xlim(xlim_curr)
 
         if arr.ndim == 1:
             plt.xlim(xlim_curr)
-
-        if pts is not None:
-            ax[0, i].scatter(*pts, s=s, c=scatter_color)
 
     if title is not None:
         fig.suptitle(title)
 
     if save_to is not None:
-        plt.savefig(save_to, dpi=dpi)
+        plt.savefig(save_to, dpi=dpi, bbox_inches='tight')
 
     plt.show()
 
@@ -196,22 +253,19 @@ def spectrum_plot(arrs, frame, rate, max_freq=None, names=None,
     -------
     Plot of seismogram(s) and power spectrum(s).
     """
-    if isinstance(arrs, np.ndarray) and arrs.ndim == 2:
-        arrs = (arrs,)
+    names = to_list(names)
+    arrs = infer_array(arrs, is_2d_array)
 
-    if isinstance(names, str):
-        names = (names,)
-
-    _, ax = plt.subplots(2, len(arrs), figsize=figsize, squeeze=False)
-    for i, arr in enumerate(arrs):
+    _, ax = plt.subplots(2, arrs.shape[1], figsize=figsize * np.array([arrs.shape[1], 2]), squeeze=False)
+    for i, arr in enumerate(arrs.flatten()):
         setup_imshow(ax[0, i], arr.T, **kwargs)
         rect = patches.Rectangle((frame[0].start, frame[1].start),
                                  frame[0].stop - frame[0].start,
                                  frame[1].stop - frame[1].start,
                                  edgecolor='r', facecolor='none', lw=2)
+
+        ax[0, i].set_title(names[i])
         ax[0, i].add_patch(rect)
-        ax[0, i].set_title('Seismogram {}'.format(names[i] if names
-                                                  is not None else ''))
         ax[0, i].set_aspect('auto')
         spec = abs(np.fft.rfft(arr[frame], axis=1))**2
         freqs = np.fft.rfftfreq(len(arr[frame][0]), d=rate)
@@ -224,11 +278,11 @@ def spectrum_plot(arrs, frame, rate, max_freq=None, names=None,
         ax[1, i].set_title('Spectrum plot {}'.format(names[i] if names is not None else ''))
 
     if save_to is not None:
-        plt.savefig(save_to, dpi=dpi)
+        plt.savefig(save_to, dpi=dpi, bbox_inches='tight')
 
     plt.show()
 
-def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=None, 
+def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=(8, ), 
               names=None, dpi=None, save_to=None, **kwargs):# pylint: disable=too-many-branches
     r"""Gain's graph plots the ratio of the maximum mean value of
     the amplitude to the mean value of the smoothed amplitude at the moment t.
@@ -245,7 +299,7 @@ def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=None,
 
     Parameters
     ----------
-    sample : array-like
+    arrs : array-like
         Seismogram.
     window : int, default 51
         Size of smoothing window of the median filter.
@@ -262,17 +316,17 @@ def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=None,
     -------
     Gain's plot.
     """
-    if isinstance(arrs, np.ndarray) and arrs.ndim == 2:
-        arrs = (arrs,)
+    names = to_list(names)
+    arrs = infer_array(arrs, is_2d_array)
 
-    _, ax = plt.subplots(1, len(arrs), figsize=figsize)
-    ax = ax.reshape(-1) if isinstance(ax, np.ndarray) else [ax]
+    _, ax = plt.subplots(2, arrs.shape[1], figsize=figsize * np.array([arrs.shape[1], 2]), squeeze=False)
+    
+    for i, arr in enumerate(arrs.flatten()):
+        setup_imshow(ax[0, i], arr.T, **kwargs)
+        ax[0, i].set_title(names[i])
 
-    for ix, sample in enumerate(arrs):
-        result = measure_gain_amplitude(sample, window)
-        ax[ix].plot(result, range(len(result)), **kwargs)
-        if names is not None:
-            ax[ix].set_title(names[ix])
+        result = measure_gain_amplitude(arr, window)
+        ax[1, i].plot(result, range(len(result)), **kwargs)
         if xlim is None:
             set_xlim = (max(result)-min(result)*.1, max(result)+min(result)*1.1)
         elif isinstance(xlim[0], (int, float)):
@@ -280,7 +334,7 @@ def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=None,
         elif len(xlim) != len(arrs):
             raise ValueError('Incorrect format for xbounds.')
         else:
-            set_xlim = xlim[ix]
+            set_xlim = xlim[i]
 
         if ylim is None:
             set_ylim = (len(result)+100, -100)
@@ -289,15 +343,16 @@ def gain_plot(arrs, window=51, xlim=None, ylim=None, figsize=None,
         elif len(ylim) != len(arrs):
             raise ValueError('Incorrect format for ybounds.')
         else:
-            set_ylim = ylim[ix]
+            set_ylim = ylim[i]
 
-        ax[ix].set_ylim(set_ylim)
-        ax[ix].set_xlim(set_xlim)
-        ax[ix].set_xlabel('Maxamp/Amp')
-        ax[ix].set_ylabel('Time')
+        ax[1, i].set_ylim(set_ylim)
+        ax[1, i].set_xlim(set_xlim)
+        ax[1, i].set_xlabel('Maxamp/Amp')
+        ax[1, i].set_ylabel('Time')
+        ax[1, i].set_title('Gain plot {}'.format(names[i] if names is not None else ''))
 
     if save_to is not None:
-        plt.savefig(save_to, dpi=dpi)
+        plt.savefig(save_to, dpi=dpi, bbox_inches='tight')
 
     plt.show()
 
@@ -338,33 +393,30 @@ def statistics_plot(arrs, stats, rate=None, figsize=None, names=None,
                           std_ampl=lambda x, *args: np.std(x, axis=1),
                           rms_freq=rms_freq)
 
-    if isinstance(arrs, np.ndarray) and arrs.ndim == 2:
-        arrs = (arrs,)
 
-    if isinstance(stats, str) or callable(stats):
-        stats = (stats,)
+    names, stats = [to_list(obj) for obj in [names, stats]]
+    arrs = infer_array(arrs, is_2d_array) 
 
-    if isinstance(names, str):
-        names = (names,)
+    _, ax = plt.subplots(2, arrs.shape[1], figsize=figsize * np.array([arrs.shape[1], 2]), squeeze=False)
+    for i, arr in enumerate(arrs.flatten()):
+        setup_imshow(ax[0, i], arr.T, **kwargs)
+        ax[0, i].set_title(names[i])
 
-    _, ax = plt.subplots(2, len(arrs), figsize=figsize, squeeze=False)
-    for i, arr in enumerate(arrs):
         for k in stats:
             if isinstance(k, str):
                 func, label = statistics_zoo[k], k
             else:
                 func, label = k, k.__name__
 
-            ax[0, i].plot(func(arr, rate), label=label)
+            ax[1, i].plot(func(arr, rate), label=label)
 
-        ax[0, i].legend()
-        ax[0, i].set_xlim([0, len(arr)])
-        ax[0, i].set_aspect('auto')
-        ax[0, i].set_title(names[i] if names is not None else '')
-        setup_imshow(ax[1, i], arr.T, **kwargs)
+        ax[1, i].legend()
+        ax[1, i].set_xlim([0, len(arr)])
+        ax[1, i].set_aspect('auto')
+        ax[1, i].set_title('Statisticks  {}'.format(names[i] if names is not None else ''))
 
     if save_to is not None:
-        plt.savefig(save_to, dpi=dpi)
+        plt.savefig(save_to, dpi=dpi, bbox_inches='tight')
 
     plt.show()
 
@@ -435,7 +487,7 @@ def show_1d_heatmap(idf, figsize=None, save_to=None, dpi=300, **kwargs):
     plt.ylabel("Line index")
     plt.axes().set_aspect('auto')
     if save_to is not None:
-        plt.savefig(save_to, dpi=dpi)
+        plt.savefig(save_to, dpi=dpi, bbox_inches='tight')
 
     plt.show()
 
@@ -516,26 +568,31 @@ def plot_metrics_map(metrics_map, cmap=None, title=None, figsize=(10, 7), # pyli
     ----
     1. The map is drawn with origin = 'lower' by default, keep it in mind when passing ticks_labels.
     """
+
     if cmap is None:
         colors = ((0.0, 0.6, 0.0), (.66, 1, 0), (0.9, 0.0, 0.0))
         cmap = mcolors.LinearSegmentedColormap.from_list(
             'cmap', colors)
-        cmap.set_under('black')
+        #cmap.set_under('black')
         cmap.set_over('red')
 
     origin = kwargs.pop('origin', 'lower')
     aspect = kwargs.pop('aspect', 'auto')
     fig, ax = plt.subplots(figsize=figsize)
+    ticks, labels, cbsize = kwargs.pop('ticks', None), kwargs.pop('labels', None), kwargs.pop('cbsize', 15)
     img = ax.imshow(metrics_map, origin=origin, cmap=cmap,
                      aspect=aspect, **kwargs)
-
+    
     if pad:
         ax.use_sticky_edges = False
         ax.margins(x=0.01, y=0.01)
 
     ax.set_title(title, fontsize=fontsize)
     cbar = fig.colorbar(img, extend='both', ax=ax)
-    cbar.ax.tick_params(labelsize=fontsize)
+    from matplotlib.ticker import PercentFormatter, MultipleLocator
+    cbar.ax.yaxis.set_major_formatter(PercentFormatter(1, 0))
+    cbar.ax.yaxis.set_major_locator(MultipleLocator()) 
+    cbar.ax.tick_params(labelsize=cbsize)
 
     _set_ticks(ax=ax, img_shape=metrics_map.T.shape, ticks_range_x=ticks_range_x,
                ticks_range_y=ticks_range_y, x_ticks=x_ticks, y_ticks=y_ticks,

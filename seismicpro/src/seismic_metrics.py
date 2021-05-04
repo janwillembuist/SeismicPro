@@ -197,11 +197,11 @@ class MetricsMap(Metrics):
                              "Please wrap the function with @njit decorator.")
         agg_func_kwargs = dict() if agg_func_kwargs is None else agg_func_kwargs
         args = self._create_args(agg_func.py_func, **agg_func_kwargs)
-
+    
         metrics_map = self.construct_metrics_map(coords_x=coords_x, coords_y=coords_y,
                                                  metrics=metrics, bin_size=bin_size,
                                                  agg_func=agg_func, args=args)
-
+    
         if plot:
             ticks_range_x = [coords_x.min(), coords_x.max()]
             ticks_range_y = [coords_y.min(), coords_y.max()]
@@ -262,6 +262,7 @@ class MetricsMap(Metrics):
         range_x = np.arange(coords_x.min(), coords_x.max() + 1, bin_size_x)
         range_y = np.arange(coords_y.min(), coords_y.max() + 1, bin_size_y)
         metrics_map = np.full((len(range_y), len(range_x)), np.nan)
+
         for i in prange(len(range_x)): #pylint: disable=not-an-iterable
             for j in prange(len(range_y)): #pylint: disable=not-an-iterable
                 mask = ((coords_x - range_x[i] >= 0) & (coords_x - range_x[i] < bin_size_x) &

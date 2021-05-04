@@ -794,40 +794,50 @@ def transform_to_fixed_width_columns(path, path_save=None, n_spaces=8, max_len=(
                 return
             shutil.copyfile(write_file.name, path)
 
-def infer_axis_tickers(batch, index, src, x_tick, y_tick):
-    """ In case x_ticker / y_ticker strings, corresponding tickers will be infered from dataframe / meta. 
-    In case x_ticker / y_ticker dicts, they should contains axis configuration and will be used as is. 
-    """    
-    df = batch.index.get_df(index)
+def collect_components_data(batch, src, pos):
+    """ Collect data from the batch. 
+    Packs it into 2d array 'O' dtype, where each elent is a component object. """
+    if src[0] is None:
+        return None        
+    data = np.empty((len(pos), len(src)), 'O')
+    for i, ipos in enumerate(pos):
+        for j, isrc in enumerate(src):
+            data[i, j] = getattr(batch, isrc)[ipos]
+    return data
 
-    x_ticker, y_ticker = {}, {}
-    
-    # process x-ticker
-    if isinstance(x_tick, str): # infer ticker from dataframe
-        sorting = batch.meta[src]['sorting']
-        if sorting is not None:
-            xticks_labels = df.sort_values(sorting)[x_tick]
-        else:
-            xticks_labels = df[x_tick]
-        x_ticker['formatter'] = IndexFormatter(xticks_labels)
+def is_2d_array(array):
+    return np.isscalar(array[0][0])
 
-    elif isinstance(x_tick, dict): # dict with config passed, it will be used directly
-        x_ticker = x_tick
-    elif isinstance(x_tick, (list, tuple, np.ndarray)): # ticker will be inferred later in utils.setup_tickers
-        x_ticker = x_tick
+def is_1d_array(array):
+    return np.isscalar(array[0])
 
-    # process y-ticker
-    if y_tick == 'time': # infer ticker from meta
-        yticks_labels = batch.meta[src]['samples']
-        y_ticker['formatter'] = IndexFormatter(yticks_labels)
+def infer_array(data, cond):
+    """ Given the nested(max depth 2) structure of objects,  where the object is defined 
+    by the condition (for example: for gather - is_2d_array, for horizon - is_1d_array) rearange it into
+    np.2darray with 'O' dtype. Each element of resulted array is a requsted object.
+    """
+    if data is None:
+        return None 
 
-    elif y_ticker == 'samples': # default ticker will be used
-        pass 
+    if cond(data): # data is a desired object, wrap it into 'O' array with shape 1x1 
+        blank = np.empty((1, 1), 'O')
+        blank[0, 0] = data
+    elif cond(data[0]): # data is a iterable of objects, wrap it into array with the shape 1xN
+        blank = np.empty((1, len(data)),  'O')
+        for i, _ in enumerate(data):
+            blank[0, i] = data[i]
+    elif cond(data[0][0]):  # data is a nested(depth 2) structure of objects, wrap it into array with the shape MxN
+        blank = np.empty((len(data), len(data[0])), 'O')
+        for i, _ in enumerate(data):
+            for j, _ in enumerate(data[0]):
+                blank[i, j] = data[i][j]
 
-    elif isinstance(y_tick, dict): 
-        y_ticker = y_tick
-    
-    elif isinstance(x_tick, (list, tuple, np.ndarray)): # ticker will be inferred later in utils.setup_tickers
-        y_ticker = x_tick
-    
-    return x_ticker, y_ticker
+    return blank
+
+def to_list(obj, n=1):
+    """Cast an object to a list and repeat it n times. Almost identical to `list(obj)` for 1-D
+    objects, except for `str`, which won't be split into separate letters but
+    transformed into a list of a single element.
+    """
+    return np.ravel(obj).tolist() * n
+     

@@ -14,9 +14,10 @@ from ..batchflow import action, inbatch_parallel, Batch, any_action_failed
 
 from .seismic_index import SegyFilesIndex, FieldIndex, KNNIndex, TraceIndex, CustomIndex
 
-from .utils import (FILE_DEPENDEND_COLUMNS, partialmethod, calculate_sdc_for_field, massive_block, infer_axis_tickers)
+from .utils import (FILE_DEPENDEND_COLUMNS, partialmethod, calculate_sdc_for_field, 
+                    massive_block, to_list, collect_components_data )
 from .file_utils import write_segy_file
-from .plot_utils import spectrum_plot, seismic_plot, statistics_plot, gain_plot
+from .plot_utils import spectrum_plot, seismic_plot, statistics_plot, gain_plot, infer_axis_tickers
 
 INDEX_UID = 'TRACE_SEQUENCE_FILE'
 
@@ -333,7 +334,7 @@ class SeismicBatch(Batch):
         batch : SeismicBatch
             Batch with loaded components.
         """
-        if fmt.lower() in ['sgy', 'segy']:
+        if fmt in ['sgy', 'segy']:
             return self._load_segy(src=components, dst=components, **kwargs)
         if fmt == 'picks':
             return self._load_from_index(src=PICKS_FILE_HEADER, dst=components)
@@ -561,8 +562,8 @@ class SeismicBatch(Batch):
         batch : SeismicBatch
             Batch unchanged.
         """
-        if not isinstance(self.index, FieldIndex):
-            raise ValueError('Geometry check dump works with FieldIndex only')
+        # if not isinstance(self.index, FieldIndex):
+        #     raise ValueError('Geometry check dump works with FieldIndex only')
         data = getattr(self, src)
 
         df = self.index.get_df(reset=True)[list(columns)].drop_duplicates()
@@ -807,7 +808,7 @@ class SeismicBatch(Batch):
         return self
 
     @action
-    @inbatch_parallel(init='_init_component')
+    @inbatch_parallel(init='_init_component', target='f')
     @apply_to_each_component
     def equalize(self, *index, src, dst, params, survey_id_col=None, upscale=False):
         """ Equalize amplitudes of different seismic surveys in dataset.
@@ -1500,72 +1501,74 @@ class SeismicBatch(Batch):
     #-------------------------------------------------------------------------#
     #                                 Plotters                                #
     #-------------------------------------------------------------------------#
-    def seismic_plot(self, src, pos=0, wiggle=False, xlim=None, ylim=None, std=1, # pylint: disable=too-many-arguments
-                     src_picking=None, s=None, scatter_color=None,
-                     figsize=(10, 7), y_ticker='samples', x_ticker=None,
-                     line_color=None, title=None, save_to=None, dpi=None, **kwargs):
+
+    @action
+    def seismic_plot(self, src, pos=0, # pylint: disable=too-many-arguments
+                     xlim=None, ylim=None, wiggle=False, std=1,
+                     src_event=None, s=None, c=None, src_attribute=None,
+                     figsize=(9, 6), title=None, line_color='k', names=None,
+                     y_ticker='samples', x_ticker=None,
+                     save_to=None, dpi=None, **kwargs):
         """Plot seismic traces.
 
         Parameters
         ----------
         src : str or array of str
             The batch component(s) with data to show.
-        pos : int, default 0
+        pos : int or array-like, default is 0
             Position of the object in the batch to show.
-        wiggle : bool, default to False
-            Show traces in a wiggle form.
         xlim : tuple, optionalgit
             Range in x-axis to show.
         ylim : tuple, optional
             Range in y-axis to show.
-        std : scalar, optional
+        wiggle : bool, default is False
+            Show traces in a wiggle form.
+        std : scalar, default is 1
             Amplitude scale for traces in wiggle form.
-        src_picking : str
-            Component with picking data.
-        s : scalar or array_like, shape (n, ), optional
-            The marker size in points**2.
-        scatter_color : color, sequence, or sequence of color, optional
-            The marker color.
-        figsize : array-like, optional
-            Output plot size.
+        src_attribute: str
+            Component name with trace's attribute. Plotted on top of the gather. For example, offset or elevation. 
+        src_event : str of array-like of str
+            Components names with data corresponding to events, happened on the trace. Measured in samples. 
+            Plotted within the gather. For example first break picking.
+        s : scalar or array_like
+            The marker size of event points. Passed directly to pyplot.scatter()
+        c : color, sequence, or sequence of color, optional
+            The marker color of event points. Passed directly to pyplot.scatter()
+        figsize : tuple, default is (9, 6)
+            The size of a single gather. 
+            In case multitple gathers/components passed the resulted figure size will be scalled accordingly.
+        title : str
+            Plot title.
+        line_color : color, sequence, or sequence of color
+            The trace color.
         save_to : str or None, optional
             If not None, save plot to given path.
         dpi : int, optional, default: None
-            The resolution argument for matplotlib.pyplot.savefig.
-        line_color : color, sequence, or sequence of color, optional, default: None
-            The trace color.
-        title : str
-            Plot title.
+            The resolution argument for pyplot.savefig.
         kwargs : dict
             Additional keyword arguments for plot.
 
         Returns
         -------
-        Multi-column subplots.
+            Plots multi column/row image.
         """
-        if len(np.atleast_1d(src)) == 1:
-            src = (src,)
+        src, pos, src_event, src_attribute = [to_list(obj) for obj in [src, pos, src_event, src_attribute]]    
+        arrs, event, attribute = [collect_components_data(self, isrc, pos) for isrc in (src, src_event, src_attribute)]
+        if event is not None:
+            event = event // (self.meta[src[0]]['interval'] // 1000)
+        if names is None:
+            names = [' '.join([i, str(self.indices[ipos])]) for ipos in pos for i in src]
+        x_ticker, y_ticker = infer_axis_tickers(self, self.indices[pos[0]], src[0], x_ticker, y_ticker)
 
-        if src_picking is not None:
-            rate = self.meta[src[0]]['interval'] / 1e3
-            picking = getattr(self, src_picking)[pos] / rate
-            pts_picking = (range(len(picking)), picking)
-        else:
-            pts_picking = None
-
-        arrs = [getattr(self, isrc)[pos] for isrc in src]
-        names = [' '.join([i, str(self.indices[pos])]) for i in src]
-
-        x_ticker, y_ticker = infer_axis_tickers(self, self.indices[pos], src[0], x_ticker, y_ticker)
-        seismic_plot(arrs=arrs, wiggle=wiggle, xlim=xlim, ylim=ylim, std=std,
-                     pts=pts_picking, s=s, scatter_color=scatter_color,
-                     figsize=figsize, names=names, save_to=save_to,
-                     dpi=dpi, line_color=line_color, title=title, 
-                     x_ticker=x_ticker, y_ticker=y_ticker, **kwargs)
+        seismic_plot(arrs=arrs, xlim=xlim, ylim=ylim, wiggle=wiggle, std=std, 
+                     event=event, s=s, c=c, attribute=attribute, 
+                     figsize=figsize, line_color=line_color, title=title, names=names, 
+                     x_ticker=x_ticker, y_ticker=y_ticker, 
+                     save_to=save_to, dpi=dpi, **kwargs)
         return self
     
 
-    def crops_plot(self, src, index, # pylint: disable=too-many-arguments
+    def crops_plot(self, src, pos=0, # pylint: disable=too-many-arguments
                    num_crops=None,
                    wiggle=False, std=1,
                    src_picking=None, s=None, scatter_color=None,
@@ -1577,8 +1580,8 @@ class SeismicBatch(Batch):
         ----------
         src : str or array of str
             The batch component(s) with crops to show.
-        index : same type as batch.indices
-            Data index to show.
+        pos : int, default is 0
+            Position of the object in the batch to show.
         num_crops: int or None
             If not None, random `num_crops` crops are shown, all crops otherwise
         wiggle : bool, default to False
@@ -1610,14 +1613,14 @@ class SeismicBatch(Batch):
         if 'crop_coords' not in self.meta[src]:
             raise ValueError("{} component doesn't contain crops!".format(src))
 
-        pos = self.index.get_pos(index)
-
         if src_picking is not None:
             raise NotImplementedError()
 
         pts_picking = None
 
-        arrs = getattr(self, src)[pos]
+        pos = to_list(pos)
+
+        arrs = collect_components_data(self, src, pos)
         total_crops = len(arrs)
         names = self.meta[src]['crop_coords'][index]
 
@@ -1633,17 +1636,19 @@ class SeismicBatch(Batch):
 
         seismic_plot(arrs=arrs, wiggle=wiggle, std=std,
                      pts=pts_picking, s=s, scatter_color=scatter_color,
-                     figsize=figsize, names=names, save_to=save_to,
+                     figsize=figsize, columnwise=False, names=names, save_to=save_to,
                      dpi=dpi, title=title, **kwargs)
         return self
 
-    def gain_plot(self, src, index, window=51, xlim=None, ylim=None,
-                  figsize=(10, 7), names=None,  save_to=None, dpi=None, **kwargs):
+    def gain_plot(self, src, pos=0, window=51, xlim=None, ylim=None,
+                  figsize=(8, 5), names=None,  save_to=None, dpi=None, **kwargs):
         """Gain's graph plots the ratio of the maximum mean value of
         the amplitude to the mean value of the amplitude at the moment t.
 
         Parameters
         ----------
+        pos : int, default 0
+            Position of the object in the batch to show.
         window : int, default 51
             Size of smoothing window of the median filter.
         xlim : tuple or list with size 2
@@ -1659,23 +1664,23 @@ class SeismicBatch(Batch):
         -------
         Gain's plot.
         """
-        _ = kwargs
-        pos = self.index.get_pos(index)
-        src = (src, ) if isinstance(src, str) else src
-        sample = [getattr(self, source)[pos] for source in src]
-        gain_plot(sample, window, xlim, ylim, figsize, names, **kwargs)
+        src = to_list(src)
+        arrs = [getattr(self, isrc)[pos] for isrc in src]
+        names = names or [' '.join([i, str(self.indices[pos])]) for i in src]
+
+        gain_plot(arrs, window, xlim, ylim, figsize, names, **kwargs)
         return self
 
-    def spectrum_plot(self, src, index, frame, max_freq=None,
-                      figsize=(10, 10), save_to=None, dpi=None, **kwargs):
+    def spectrum_plot(self, src, pos=0, frame=None, max_freq=None,
+                      figsize=(8, 5), save_to=None, dpi=None, **kwargs):
         """Plot seismogram(s) and power spectrum of given region in the seismogram(s).
 
         Parameters
         ----------
         src : str or array of str
             The batch component(s) with data to show.
-        index : same type as batch.indices
-            Data index to show.
+        pos : int, default is 0
+            Position of the object in the batch to show.
         frame : tuple
             List of slices that frame region of interest.
         max_freq : scalar
@@ -1691,18 +1696,16 @@ class SeismicBatch(Batch):
         -------
         Plot of seismogram(s) and power spectrum(s).
         """
-        pos = self.index.get_pos(index)
-        if len(np.atleast_1d(src)) == 1:
-            src = (src,)
-
-        arrs = [getattr(self, isrc)[pos] for isrc in src]
-        names = [' '.join([i, str(index)]) for i in src]
+        src = to_list(src)
+        arrs = collect_components_data(self, src, pos)
+        names = [' '.join([i, str(self.indices[pos])]) for i in src]
         rate = self.meta[src[0]]['interval'] / 1e6
+
         spectrum_plot(arrs=arrs, frame=frame, rate=rate, max_freq=max_freq,
                       names=names, figsize=figsize, save_to=save_to, dpi=dpi, **kwargs)
         return self
 
-    def statistics_plot(self, src, index, stats, figsize=(10, 10), 
+    def statistics_plot(self, src, pos=0, stats=None, figsize=(8, 5), 
                         save_to=None, dpi=None, **kwargs):
         """Plot seismogram(s) and various trace statistics.
 
@@ -1710,8 +1713,9 @@ class SeismicBatch(Batch):
         ----------
         src : str or array of str
             The batch component(s) with data to show.
-        index : same type as batch.indices
-            Data index to show.
+            The batch component(s) with data to show.
+        pos : int, default is 0
+            Position of the object in the batch to show.
         stats : str, callable or array-like
             Name of statistics in statistics zoo, custom function to be avaluated or array of stats.
         figsize : array-like, optional
@@ -1725,13 +1729,12 @@ class SeismicBatch(Batch):
         -------
         Plot of seismogram(s) and power spectrum(s).
         """
-        pos = self.index.get_pos(index)
-        if len(np.atleast_1d(src)) == 1:
-            src = (src,)
-
-        arrs = [getattr(self, isrc)[pos] for isrc in src]
-        names = [' '.join([i, str(index)]) for i in src]
+        src = to_list(src)
+        arrs = collect_components_data(self, src, pos)
+        names = [' '.join([isrc, str(self.indices[pos])]) for isrc in src]
         rate = self.meta[src[0]]['interval'] / 1e6
+    
         statistics_plot(arrs=arrs, stats=stats, rate=rate, names=names, figsize=figsize,
                         save_to=save_to, dpi=dpi, **kwargs)
         return self
+
