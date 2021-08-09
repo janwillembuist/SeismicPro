@@ -239,3 +239,26 @@ def clip(data, data_min, data_max):
     for i in range(len(data)):  # pylint: disable=consider-using-enumerate
         data[i] = min(max(data[i], data_min), data_max)
     return data.reshape(data_shape)
+
+
+@njit(nogil=True)
+def is_decreasing(window):
+    return (np.diff(window[0]) < 1e-6).any()
+
+
+@njit(nogil=True)
+def max_std(window):
+    max_std = 0
+    for i in range(window.shape[1]):
+        current_std = window[:, i].std()
+        max_std = max(max_std, current_std)
+    return max_std
+
+
+@njit(nogil=True)
+def max_mean_variation(window):
+    max_mean_var = 0
+    for i in range(window.shape[1]):
+        current_mean_var = (np.mean(window[:, i]) - window[0, i]) / window[0, i]
+        max_mean_var = max(max_mean_var, current_mean_var)
+    return max_mean_var

@@ -1,13 +1,17 @@
 """Implements classes for velocity analysis: StackingVelocity and VelocityCube"""
 
 import warnings
+from functools import partial, lru_cache
+from collections import defaultdict
 
-import numpy as np
 import cv2
+import numpy as np
+from tqdm import tqdm
 from scipy.interpolate import interp1d, LinearNDInterpolator
-from sklearn.neighbors import NearestNeighbors
+from sklearn.neighbors import NearestNeighbors, KDTree
 
-from .utils import to_list, read_vfunc, read_single_vfunc
+from .metrics import MetricsMap
+from .utils import to_list, read_vfunc, read_single_vfunc, is_decreasing, max_std, max_mean_variation
 
 
 class VelocityInterpolator:
@@ -330,6 +334,11 @@ class VelocityCube:
     interpolator creation is useful when the cube should be passed to different proccesses (e.g. in a pipeline with
     prefetch with `mpc` target) since otherwise the interpolator will be independently created in all the processes.
 
+    Quality Control can be performed on the velocty cube via `QC` method. It calculates spatial-window-based metrics
+    for velocity laws. See the `QC_WIN_AGG_FUNCS` for metrics available. By default, QC is performed on the 
+    velocity laws stored in the cube. QC can be done on the velocity laws obtained from the interpolator by
+    providing spatial and temporal region of interest via `coords_to_interpolate` and `times_to_interpolate` params.
+
     Examples
     --------
     The cube can either be loaded from a file:
@@ -343,6 +352,14 @@ class VelocityCube:
 
     Cube creation should be finalized with `create_interpolator` method call:
     >>> cube.create_interpolator()
+
+    Quality Control performed on the velocity laws stored in the cube:
+    >>> metrics = cube.QC()
+    Returned `metrics` is an instance of :class:`~metrics.MetricsMap`
+
+    Quality Control performed on the interpolated velocity laws for provided region
+    >>> metrics = cube.QC(coords_to_interpolate = list(zip(range(0, 10), range(0, 10)),
+                           times_to_interpolate = np.arange(0, 3000, 2))
 
     Parameters
     ----------
@@ -509,3 +526,88 @@ class VelocityCube:
             if self.is_dirty_interpolator:
                 warnings.warn("Dirty interpolator is being used", RuntimeWarning)
         return self.interpolator(inline, crossline)
+
+    def QC(self, coords_to_interpolate=None, times_to_interpolate=None, **kwargs):
+        """ Quality Control for the velocity cube.
+        
+        By default QC is done only on the velocity laws stored in the cube. To perform QC on the interpolated
+        velocity laws provide the desired region of intererst via `coords_to_interpolate` and `times_to_interpolate`.
+
+        Parameters
+        ----------
+        coords_to_interpolate : 2d np.array, optional, defaults to None
+            Coords where to interpolate velocity laws, coords[0] correspond to a single pair (x, y).
+            If provided, QC is done on the interpolated velocity laws for given spatial region. 
+            If not provided, QC is done on the velocity laws stored in the cube.
+        times_to_interpolate : 1d np.array, optional, default to None
+            Times where to interpolate velocity laws, measured in miliseconds.
+            Must be provided if `coords_to_interpolate` are given.
+        kwargs : misc, optional
+            Additional keyword arguments to `self.calculate_window_metrics()`.
+
+        Returns
+        -------
+            : MetricsMap
+           Instance with stored calculated metrics
+        """
+        if coords_to_interpolate is not None:
+            if times_to_interpolate is None:
+                raise ValueError('Times for interpolation must be provided')
+            coords = coords_to_interpolate
+            laws = [self(*point) for point in coords]
+        else:
+            coords = np.array(list(self.stacking_velocities_dict.keys()))
+            laws = np.array(list(self.stacking_velocities_dict.values()))
+    
+        metrics = self.calculate_window_metrics(laws, coords, times_to_interpolate, **kwargs)
+        return MetricsMap(coords, **metrics)
+
+    QC_WIN_AGG_FUNCS = {
+        'IS_DECREASING':      is_decreasing,
+        'WIN_DISPERSSION':    max_std,
+        'WIN_MEAN_VARIATION': max_mean_variation
+    }
+    
+    def calculate_window_metrics(self, laws, coords, times_to_interpolate, metrics_names=QC_WIN_AGG_FUNCS.keys(), 
+                                 r=10, bar=False):
+        """ For each velocity law finds it's neighbors within window `r`, then calculates window-based metrics,
+        see the QC_WIN_AGG_FUNCS for available metrics.  
+
+        Parameters
+        ----------
+        laws : iterable of `StackingVelocity` objects
+            Velocity laws for which metrics are calculated.
+        coords : iterable of pairs (x, y)
+            Spatial coords of velocity laws.
+        times_to_interpolate : 1d np.array, optional, default to None
+            Times where to interpolate velocity laws, measured in miliseconds.
+            Must be provided if `coords_to_interpolate` are given.
+        metrics_names : iterable of str
+            Metrics names to calculate. See the `QC_WIN_AGG_FUNCS` for avaliable metrics.
+        r: int, defaults to 10
+            The window radius for calculating metrics.
+        bar: bool, defaults to False
+            Whether to display progress bar.
+
+        Returns
+        -------
+            : metrics
+           Dict with stored metrics
+        """
+        metrics = defaultdict(list)
+        knn = KDTree(coords)
+        all_windows_indices, _ = knn.query_radius(coords, r, return_distance=True, sort_results=True)
+        for window_indices in tqdm(all_windows_indices, disable=not bar):
+            window_laws = [laws[i] for i in window_indices]
+            
+            if times_to_interpolate is not None:
+                times = times_to_interpolate
+            else:
+                times = np.unique([time for law in window_laws for time in law.times])
+    
+            window_velocities = np.vstack([law(times) for law in window_laws])
+            for metric_name in metrics_names:
+                win_agg_func = self.QC_WIN_AGG_FUNCS[metric_name]
+                val = win_agg_func(window_velocities)
+                metrics[metric_name].append(val)
+        return metrics
