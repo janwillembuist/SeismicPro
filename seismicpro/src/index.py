@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from .survey import Survey
-from .utils import maybe_copy, unique_indices_sorted
+from .utils import to_list, maybe_copy, unique_indices_sorted
 from ..batchflow import DatasetIndex
 
 
@@ -341,6 +341,7 @@ class SeismicIndex(DatasetIndex):
         headers.reset_index(inplace=True)
         headers["CONCAT_ID"] = 0
         headers.set_index(["CONCAT_ID"] + old_index, inplace=True)
+        headers.columns = [[survey.name] * len(headers.columns), headers.columns]
 
         surveys_dict = {survey.name: [survey]}
         return cls.from_attributes(headers=headers, surveys_dict=surveys_dict)
@@ -358,8 +359,37 @@ class SeismicIndex(DatasetIndex):
             survey_indices.append(survey)
         return survey_indices
 
+    @staticmethod
+    def _get_cols_by_sur(column_index, sur_name):
+        return set(column_index.get_level_values(1)[column_index.get_level_values(0) == sur_name])
+
+    @staticmethod
+    def _add_common_level(columns):
+        return [("", col) for col in columns]
+
     @classmethod
-    def _merge_two_indices(cls, x, y, **kwargs):
+    def _add_to_common_columns(cls, df, common_columns):
+        survey_names = list(set(df.columns.get_level_values(0)) - set(("",)))
+
+        common_columns = common_columns - cls._get_cols_by_sur(df.columns, "")
+        for column in common_columns:
+            df[("", column)] = df[(survey_names[0], column)]
+            df.drop(columns=(survey_names[0], column), inplace=True)
+            for name in survey_names[1:]:
+                df = df[df[("", column)] == df[(name, column)]]
+                df.drop(columns=(name, column), inplace=True)
+        return df
+
+    @classmethod
+    def _get_join_columns(cls, df):
+        survey_columns = []
+        for survey_name in set(df.columns.get_level_values(0)) - set(("",)):
+            survey_columns.append(cls._get_cols_by_sur(df.columns, survey_name))
+        survey_columns = survey_columns.pop().intersection(*survey_columns) if survey_columns else set()
+        return cls._get_cols_by_sur(df.columns, "") | survey_columns
+
+    @classmethod
+    def _merge_two_indices(cls, x, y, on, on_except, **kwargs):
         """Merge two `SeismicIndex` instances into one."""
         intersect_keys = x.surveys_dict.keys() & y.surveys_dict.keys()
         if intersect_keys:
@@ -371,13 +401,33 @@ class SeismicIndex(DatasetIndex):
         if x_index_columns != y_index_columns:
             raise ValueError("All indices must be indexed by the same columns")
 
-        headers = pd.merge(x.headers.reset_index(), y.headers.reset_index(), **kwargs)
+        x_headers = x.headers.reset_index(col_level=-1)
+        y_headers = y.headers.reset_index(col_level=-1)
+
+        if on is not None:
+            on = set(to_list(on))
+        else:
+            x_columns = cls._get_join_columns(x_headers)
+            y_columns = cls._get_join_columns(y_headers)
+            on = x_columns & y_columns
+            if on_except is not None:
+                on -= set(to_list(on_except))
+        on.add("CONCAT_ID")
+        print(on)
+
+        x_headers = cls._add_to_common_columns(x_headers, on)
+        y_headers = cls._add_to_common_columns(y_headers, on)
+        headers = pd.merge(x_headers, y_headers, on=cls._add_common_level(on), **kwargs)
         if headers.empty:
             raise ValueError("Empty index after merge")
+        print(headers.columns)
+        print(headers.head())
+        headers.set_index(cls._add_common_level(x_index_columns), inplace=True)
+        headers.index.names = x_index_columns
 
         surveys_dict = {**x.surveys_dict, **y.surveys_dict}
         max_len = max(x.next_concat_id, y.next_concat_id)
-        dropped_ids = np.setdiff1d(np.arange(max_len), np.unique(headers["CONCAT_ID"]))
+        dropped_ids = np.setdiff1d(np.arange(max_len), np.unique(headers.index.get_level_values("CONCAT_ID")))
         for survey in surveys_dict:
             # Pad lists in surveys_dict to max len for further concat to work correctly
             surveys_dict[survey] += [None] * (max_len - len(surveys_dict[survey]))
@@ -385,10 +435,10 @@ class SeismicIndex(DatasetIndex):
             for concat_id in dropped_ids:
                 surveys_dict[survey][concat_id] = None
 
-        return cls.from_attributes(headers=headers.set_index(x_index_columns), surveys_dict=surveys_dict)
+        return cls.from_attributes(headers=headers, surveys_dict=surveys_dict)
 
     @classmethod
-    def merge(cls, surveys, **kwargs):
+    def merge(cls, surveys, on=None, on_except="TRACE_SEQUENCE_FILE", **kwargs):
         """Merge several surveys into a single index.
 
         All the surveys being merged must be created with the same `header_index`, but have different `name`s. First,
@@ -420,7 +470,7 @@ class SeismicIndex(DatasetIndex):
             If an empty index was obtained after merging.
         """
         indices = cls._surveys_to_indices(surveys)
-        index = reduce(lambda x, y: cls._merge_two_indices(x, y, **kwargs), indices)
+        index = reduce(lambda x, y: cls._merge_two_indices(x, y, on=on, on_except=on_except, **kwargs), indices)
         return index
 
     @classmethod
@@ -471,7 +521,7 @@ class SeismicIndex(DatasetIndex):
         for index in indices:
             headers = index.headers.copy()
             concat_id = headers.index.levels[0] + concat_id_shift
-            headers.index = headers.index.set_levels(concat_id, "CONCAT_ID")
+            headers.index = headers.index.set_levels(concat_id, level="CONCAT_ID")
 
             headers_list.append(headers)
             concat_id_shift += index.next_concat_id
@@ -620,7 +670,9 @@ class SeismicIndex(DatasetIndex):
             err_msg = "Unknown survey name {}, the index contains only {}"
             raise KeyError(err_msg.format(survey_name, ", ".join(self.surveys_dict.keys())))
         survey = self.surveys_dict[survey_name][concat_id]
-        gather_headers = self.headers.loc[concat_id].loc[gather_index]
+        survey_name = ["", survey_name] if "" in self.headers.columns.get_level_values(0) else survey_name
+        gather_headers = self.headers.loc[concat_id, survey_name].loc[gather_index]
+        gather_headers.columns = gather_headers.columns.droplevel()
         return survey.load_gather(headers=gather_headers, **kwargs)
 
     def reindex(self, new_index, reindex_nested=False, reindex_surveys=False, inplace=False, **kwargs):
