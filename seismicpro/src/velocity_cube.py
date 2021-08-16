@@ -1,6 +1,7 @@
 """Implements classes for velocity analysis: StackingVelocity and VelocityCube"""
 
 import warnings
+import concurrent
 from functools import partial, lru_cache
 from collections import defaultdict
 
@@ -63,6 +64,10 @@ class VelocityInterpolator:
         fake_velocities = [self._interpolate_nearest(i, x) for i, x in fake_velocities_coords]
         stacking_velocities = list(self.stacking_velocities_dict.values()) + fake_velocities
         vel_data = np.concatenate([vel.interpolation_data for vel in stacking_velocities])
+
+        max_t = max([law.times[-1] for law in self.stacking_velocities_dict.values()])
+        self.density = len(vel_data) / ((max_i - min_i) * (max_x - min_x) * max_t)
+
         self.linear_interpolator = LinearNDInterpolator(vel_data[:, :-1], vel_data[:, -1], rescale=True)
 
         # Perform the first auxilliary call of the linear_interpolator for it to work properly in different processes.
@@ -549,6 +554,7 @@ class VelocityCube:
         -------
             : MetricsMap
            Instance with stored calculated metrics
+
         """
         if coords_to_interpolate is not None:
             if times_to_interpolate is None:
@@ -591,21 +597,22 @@ class VelocityCube:
 
         Returns
         -------
-            : metrics
-           Dict with stored metrics
+            : Dict
+           Calculated metrics
         """
+        velocity_cube = {}
+        def _fill_velocities(law, times=times_to_interpolate):
+            velocity_cube[law.inline, law.crossline] = law(times)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=80) as executor:
+            executor.map(_fill_velocities, laws)
+        
         metrics = defaultdict(list)
         knn = KDTree(coords)
-        all_windows_indices, _ = knn.query_radius(coords, r, return_distance=True, sort_results=True)
-        for window_indices in tqdm(all_windows_indices, disable=not bar):
-            window_laws = [laws[i] for i in window_indices]
-            
-            if times_to_interpolate is not None:
-                times = times_to_interpolate
-            else:
-                times = np.unique([time for law in window_laws for time in law.times])
-    
-            window_velocities = np.vstack([law(times) for law in window_laws])
+        windows_indices, _ = knn.query_radius(coords, r, return_distance=True, sort_results=True)
+        for window_indices in tqdm(windows_indices, disable=not bar):
+            window_coords = coords[window_indices]
+            window_velocities = np.vstack([velocity_cube[coord[0], coord[1]] for coord in window_coords])
             for metric_name in metrics_names:
                 win_agg_func = self.QC_WIN_AGG_FUNCS[metric_name]
                 val = win_agg_func(window_velocities)
