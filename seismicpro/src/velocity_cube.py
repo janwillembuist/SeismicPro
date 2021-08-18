@@ -442,7 +442,7 @@ class VelocityCube:
             self.is_dirty_interpolator = True
         return self
 
-    def create_interpolator(self, max_r=40):
+    def create_interpolator(self, max_r=100):
         """Create velocity interpolator from stacking velocities in the cube.
 
         Notes
