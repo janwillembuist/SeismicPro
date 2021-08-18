@@ -5,105 +5,67 @@ import warnings
 import numpy as np
 import cv2
 from scipy.interpolate import interp1d, LinearNDInterpolator
-from sklearn.neighbors import NearestNeighbors
+from sklearn.neighbors import NearestNeighbors, KDTree
 
 from .utils import to_list, read_vfunc, read_single_vfunc, dump_vfunc
 
 
 class VelocityInterpolator:
-    """A class for stacking velocity interpolation over the whole field.
-
-    Velocity interpolator accepts a dict of stacking velocities and constructs a convex hull of their coordinates.
-    After that, given an inline and a crossline of unknown stacking velocity to get, interpolation is performed in the
-    following way:
-    1. If spatial coordinates lie within the constructed convex hull, linear barycentric interpolation over
-       Delaunay-triangulated data is used for velocity interpolation,
-    2. Otherwise, the closest known stacking velocity in Euclidean distance is returned.
-
-    Parameters
-    ----------
-    stacking_velocities_dict : dict
-        A dict of stacking velocities whose keys are tuples with their spatial coordinates and values are the stacking
-        velocities themselves.
-
-    Attributes
-    ----------
-    stacking_velocities_dict : dict
-        A dict of stacking velocities whose keys are tuples with their spatial coordinates and values are the stacking
-        velocities themselves.
-    coords : 2d np.ndarray
-        Stacked coordinates of velocities from `stacking_velocities_dict`.
-    coords_hull : 3d np.ndarray
-        Convex hull of coordinates of stacking velocities. Later used to choose the interpolation strategy for the
-        requested coordinates.
-    nearest_interpolator : NearestNeighbors
-        An estimator of the closest stacking velocity to the passed spatial coordinates.
-    linear_interpolator : LinearNDInterpolator
-        Piecewise linear interploator of the velocity data passed in `stacking_velocities_dict`.
-    """
-    def __init__(self, stacking_velocities_dict):
+    def __init__(self, stacking_velocities_dict, max_r=100):
         self.stacking_velocities_dict = stacking_velocities_dict
-
-        # Calculate the convex hull of given stacking velocity coordinates to further select appropriate interpolator
         self.coords = np.stack(list(self.stacking_velocities_dict.keys()))
-        self.coords_hull = cv2.convexHull(self.coords, returnPoints=True)
+        self.laws = np.array(list(self.stacking_velocities_dict.values()))
+        self.knn = KDTree(self.coords)
+        self.max_r = max_r
 
-        self.nearest_interpolator = NearestNeighbors(n_neighbors=1)
-        self.nearest_interpolator.fit(self.coords)
+    def _az(self, x, y):
+        if x > 0 and y > 0: return 1
+        elif x <= 0 and y > 0: return 2
+        elif x <= 0 and y <= 0: return 3
+        elif x > 0 and y <= 0: return 4
 
-        # Create artificial stacking velocities in the corners of given coordinate grid in order for
-        # LinearNDInterpolator to work with a full rank matrix of coordinates
-        min_i, min_x = np.min(self.coords, axis=0) - 1
-        max_i, max_x = np.max(self.coords, axis=0) + 1
-        fake_velocities_coords = [(min_i, min_x), (min_i, max_x), (max_i, min_x), (max_i, max_x)]
-        fake_velocities = [self._interpolate_nearest(i, x) for i, x in fake_velocities_coords]
-        stacking_velocities = list(self.stacking_velocities_dict.values()) + fake_velocities
-        vel_data = np.concatenate([vel.interpolation_data for vel in stacking_velocities])
-        self.linear_interpolator = LinearNDInterpolator(vel_data[:, :-1], vel_data[:, -1], rescale=True)
+    def point_surrounders(self, inline, crossline):
+        indices, _ = self.knn.query_radius([(inline, crossline),], r=self.max_r, return_distance=True, sort_results=True)
+        coords  = self.coords[indices[0]]
+        laws = self.laws[indices[0]]
 
-        # Perform the first auxilliary call of the linear_interpolator for it to work properly in different processes.
-        # Otherwise VelocityCube.__call__ may fail if called in a pipeline with prefetch with mpc target.
-        _ = self.linear_interpolator(0, 0, 0)
+        surrounders = {}
+        for coord, law in zip(coords, laws):
+            centered_coord = coord - (inline, crossline)
+            az = self._az(*centered_coord)
+            if az not in surrounders: 
+                surrounders[az] = law
+            if len(surrounders) == 4:
+                return surrounders
+        return surrounders
 
-    def is_in_hull(self, inline, crossline):
-        """Check if given `inline` and `crossline` lie within a convex hull of spatial coordinates of stacking
-        velocities passed during interpolator creation."""
-        return cv2.pointPolygonTest(self.coords_hull, (inline, crossline), measureDist=True) >= 0
+    def _interpolate_linear(self, inline, crossline, surrounders):
+        x_left, x_right = surrounders[3].inline, surrounders[1].inline
+        y_bot, y_top = surrounders[4].crossline, surrounders[2].crossline
+        w_inline = 1 - (x_right - inline) / (x_right - x_left)
+        w_crossline = 1 - (y_top - crossline) / (y_top - y_bot)
 
-    def _interpolate_linear(self, inline, crossline):
-        """Linearly interpolate stacking velocity at given `inline` and `crossline`."""
-        velocity_interpolator = lambda times: self.linear_interpolator(inline, crossline, times)
-        return StackingVelocity.from_interpolator(velocity_interpolator, inline, crossline)
+        times_union = np.unique([times for law in surrounders.values() for times in law.times])
+        interp_times = {az: law(times_union) for az, law in surrounders.items()}
+    
+        interp_top_inline = interp_times[1] * w_inline + interp_times[2] * (1 - w_inline)
+        interp_bot_inline = interp_times[3] * w_inline + interp_times[4] * (1 - w_inline)
+    
+        interp_crossline = interp_top_inline * w_crossline + interp_bot_inline * (1 - w_crossline) 
+        return StackingVelocity.from_points(times_union, interp_crossline, inline, crossline)
 
     def _interpolate_nearest(self, inline, crossline):
-        """Return the closest known stacking velocity to given `inline` and `crossline`."""
-        index = self.nearest_interpolator.kneighbors([(inline, crossline),], return_distance=False).item()
+        index = self.knn.query([(inline, crossline),], return_distance=False).item()
         nearest_inline, nearest_crossline = self.coords[index].tolist()
         nearest_stacking_velocity = self.stacking_velocities_dict[(nearest_inline, nearest_crossline)]
         return StackingVelocity.from_points(nearest_stacking_velocity.times, nearest_stacking_velocity.velocities,
                                             inline=inline, crossline=crossline)
 
     def __call__(self, inline, crossline):
-        """Interpolate stacking velocity at given `inline` and `crossline`.
-
-        If `inline` and `crossline` lie within a convex hull of spatial coordinates of known stacking velocities,
-        interpolate stacking velocity linearly. Otherwise return stacking velocity closest to coordinates passed.
-
-        Parameters
-        ----------
-        inline : int
-            An inline to interpolate stacking velocity at.
-        crossline : int
-            A crossline to interpolate stacking velocity at.
-
-        Returns
-        -------
-        stacking_velocity : StackingVelocity
-            Interpolated stacking velocity at (`inline`, `crossline`).
-        """
-        if self.is_in_hull(inline, crossline):
-            return self._interpolate_linear(inline, crossline)
-        return self._interpolate_nearest(inline, crossline)
+        surrounders = self.point_surrounders(inline, crossline)
+        if len(surrounders) < 4:
+            return self._interpolate_nearest(inline, crossline)
+        return self._interpolate_linear(inline, crossline, surrounders)
 
 
 class StackingVelocity:
@@ -480,7 +442,7 @@ class VelocityCube:
             self.is_dirty_interpolator = True
         return self
 
-    def create_interpolator(self):
+    def create_interpolator(self, max_r=40):
         """Create velocity interpolator from stacking velocities in the cube.
 
         Notes
@@ -509,7 +471,7 @@ class VelocityCube:
             times_union = np.union1d(stacking_velocity.times, [self.tmin, self.tmax])
             stacking_velocities_dict[coord] = stacking_velocity.set_times(times_union)
 
-        self.interpolator = VelocityInterpolator(stacking_velocities_dict)
+        self.interpolator = VelocityInterpolator(stacking_velocities_dict, max_r=max_r)
         self.is_dirty_interpolator = False
         return self
 
