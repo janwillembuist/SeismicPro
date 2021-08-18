@@ -39,9 +39,9 @@ class VelocityInterpolator:
                 return surrounders
         return surrounders
 
-    def _interpolate_linear(self, inline, crossline, surrounders):
-        x_left, x_right = surrounders[3].inline, surrounders[1].inline
-        y_bot, y_top = surrounders[4].crossline, surrounders[2].crossline
+    def _interpolate_linear_inline_crossline(self, inline, crossline, surrounders):
+        x_left, x_right = surrounders[3].inline, surrounders[4].inline
+        y_bot, y_top = surrounders[3].crossline, surrounders[2].crossline
         w_inline = 1 - (x_right - inline) / (x_right - x_left)
         w_crossline = 1 - (y_top - crossline) / (y_top - y_bot)
 
@@ -54,6 +54,24 @@ class VelocityInterpolator:
         interp_crossline = interp_top_inline * w_crossline + interp_bot_inline * (1 - w_crossline) 
         return StackingVelocity.from_points(times_union, interp_crossline, inline, crossline)
 
+    def _interpolate_linear_crossline(self, inline, crossline, surrounders):
+        y_bot, y_top = surrounders[3].crossline, surrounders[2].crossline
+        w_crossline = 1 - (y_top - crossline) / (y_top - y_bot)
+    
+        times_union = np.unique(np.concatenate([surrounders[3].times, surrounders[2].times]))
+        interp_bot, interp_top = np.array([surrounders[3](times_union), surrounders[2](times_union)])
+        interp_crossline = interp_top * w_crossline + interp_bot * (1 - w_crossline)
+        return StackingVelocity.from_points(times_union, interp_crossline, inline, crossline)
+
+    def _interpolate_linear_inline(self, inline, crossline, surrounders):
+        x_left, x_right = surrounders[3].inline, surrounders[4].inline
+        w_inline = 1 - (x_right - inline) / (x_right - x_left)
+    
+        times_union = np.unique(np.concatenate([surrounders[3].times, surrounders[4].times]))
+        interp_left, interp_right = np.array([surrounders[3](times_union), surrounders[4](times_union)])
+        interp_inline = interp_left * w_inline + interp_right * (1 - w_inline)
+        return StackingVelocity.from_points(times_union, interp_inline, inline, crossline)
+
     def _interpolate_nearest(self, inline, crossline):
         index = self.knn.query([(inline, crossline),], return_distance=False).item()
         nearest_inline, nearest_crossline = self.coords[index].tolist()
@@ -63,9 +81,16 @@ class VelocityInterpolator:
 
     def __call__(self, inline, crossline):
         surrounders = self.point_surrounders(inline, crossline)
-        if len(surrounders) < 4:
-            return self._interpolate_nearest(inline, crossline)
-        return self._interpolate_linear(inline, crossline, surrounders)
+        if len(surrounders) == 4:
+            return self._interpolate_linear_inline_crossline(inline, crossline, surrounders)
+        elif 2 in surrounders and 3 in surrounders :
+            if surrounders[2].inline == surrounders[3].inline == inline:
+                return self._interpolate_linear_crossline(inline, crossline, surrounders)
+        elif 3 in surrounders and 4 in surrounders:
+            if surrounders[3].crossline == surrounders[4].crossline == crossline:
+                return self._interpolate_linear_inline(inline, crossline, surrounders)
+        return self._interpolate_nearest(inline, crossline)
+
 
 
 class StackingVelocity:
