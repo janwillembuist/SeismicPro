@@ -43,7 +43,7 @@ class VelocityInterpolator:
                 return surrounders
         return surrounders
 
-    def _interpolate_linear_inline_crossline(self, inline, crossline, surrounders):
+    def _interpolate_linear(self, inline, crossline, surrounders):
         x_left, x_right = surrounders[2].inline, surrounders[1].inline
         y_bot, y_top = surrounders[3].crossline, surrounders[1].crossline
         w_x = 0.5 if x_right==x_left else (inline - x_left) / (x_right - x_left)
@@ -55,10 +55,17 @@ class VelocityInterpolator:
         interp_xy = np.average(interp_t, 0, w)
         return StackingVelocity.from_points(times_union, interp_xy, inline, crossline)
 
+    def _interpolate_nearest(self, inline, crossline):
+        """Return the closest known stacking velocity to given `inline` and `crossline`."""
+        index = self.knn.kneighbors([(inline, crossline),], return_distance=False).item()
+        nearest_stacking_velocity = self.laws[index]
+        return StackingVelocity.from_points(nearest_stacking_velocity.times, nearest_stacking_velocity.velocities,
+                                            inline=inline, crossline=crossline)
+
     def __call__(self, inline, crossline):
         surrounders = self.point_surrounders(inline, crossline)
         if len(surrounders) == 4:
-            return self._interpolate_linear_inline_crossline(inline, crossline, surrounders)
+            return self._interpolate_linear(inline, crossline, surrounders)
         return self._interpolate_nearest(inline, crossline)
 
 
