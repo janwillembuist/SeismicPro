@@ -15,18 +15,20 @@ class VelocityInterpolator:
         self.coords = np.array(list(stacking_velocities_dict.keys()))
         self.laws = np.array(list(stacking_velocities_dict.values()))
         
-        max_dx = np.diff(np.sort(np.unique(self.coords.T[0]))).max()
-        max_dy = np.diff(np.sort(np.unique(self.coords.T[1]))).max()
+        max_dx = np.diff(np.sort(np.unique(self.coords.T[0]))).max(initial=0)
+        max_dy = np.diff(np.sort(np.unique(self.coords.T[1]))).max(initial=0)
         max_r = np.sqrt( max_dx ** 2 + max_dy ** 2)
 
         self.knn = NearestNeighbors(n_neighbors=1, radius=max_r)
         self.knn.fit(self.coords)
 
     def _azimuth(self, x, y):
-        if x > 0 and y > 0: return 1
-        elif x <= 0 and y > 0: return 2
-        elif x <= 0 and y <= 0: return 3
-        elif x > 0 and y <= 0: return 4
+        res = []
+        if x >= 0 and y >= 0: res.append(1)
+        if x <= 0 and y >= 0: res.append(2)
+        if x <= 0 and y <= 0: res.append(3)
+        if x >= 0 and y <= 0: res.append(4)
+        return res
 
     def point_surrounders(self, inline, crossline):
         surrounders = {}
@@ -34,62 +36,29 @@ class VelocityInterpolator:
         for _, ind in enumerate(indices[0]):
             centered_coord = self.coords[ind] - (inline, crossline)
             azimuth = self._azimuth(*centered_coord)
-            if azimuth not in surrounders: 
-                surrounders[azimuth] = self.laws[ind]
+            for az in azimuth:
+                if az not in surrounders: 
+                    surrounders[az] = self.laws[ind]
             if len(surrounders) == 4:
                 return surrounders
         return surrounders
 
     def _interpolate_linear_inline_crossline(self, inline, crossline, surrounders):
-        x_left, x_right = surrounders[3].inline, surrounders[4].inline
-        y_bot, y_top = surrounders[3].crossline, surrounders[2].crossline
-        w_inline = 1 - (x_right - inline) / (x_right - x_left)
-        w_crossline = 1 - (y_top - crossline) / (y_top - y_bot)
+        x_left, x_right = surrounders[2].inline, surrounders[1].inline
+        y_bot, y_top = surrounders[3].crossline, surrounders[1].crossline
+        w_x = 0.5 if x_right==x_left else (inline - x_left) / (x_right - x_left)
+        w_y = 0.5 if y_bot==y_top else (crossline - y_bot) / (y_top - y_bot)
+        w = [w_x*w_y, (1-w_x)*w_y, (1-w_x)*(1-w_y), w_x*(1-w_y)]
 
         times_union = np.unique([times for law in surrounders.values() for times in law.times])
-        interp_times = {az: law(times_union) for az, law in surrounders.items()}
-    
-        interp_top_inline = interp_times[1] * w_inline + interp_times[2] * (1 - w_inline)
-        interp_bot_inline = interp_times[3] * w_inline + interp_times[4] * (1 - w_inline)
-    
-        interp_crossline = interp_top_inline * w_crossline + interp_bot_inline * (1 - w_crossline) 
-        return StackingVelocity.from_points(times_union, interp_crossline, inline, crossline)
-
-    def _interpolate_linear_crossline(self, inline, crossline, surrounders):
-        y_bot, y_top = surrounders[3].crossline, surrounders[2].crossline
-        w_crossline = 1 - (y_top - crossline) / (y_top - y_bot)
-    
-        times_union = np.unique(np.concatenate([surrounders[3].times, surrounders[2].times]))
-        interp_bot, interp_top = np.array([surrounders[3](times_union), surrounders[2](times_union)])
-        interp_crossline = interp_top * w_crossline + interp_bot * (1 - w_crossline)
-        return StackingVelocity.from_points(times_union, interp_crossline, inline, crossline)
-
-    def _interpolate_linear_inline(self, inline, crossline, surrounders):
-        x_left, x_right = surrounders[3].inline, surrounders[4].inline
-        w_inline = 1 - (x_right - inline) / (x_right - x_left)
-    
-        times_union = np.unique(np.concatenate([surrounders[3].times, surrounders[4].times]))
-        interp_left, interp_right = np.array([surrounders[3](times_union), surrounders[4](times_union)])
-        interp_inline = interp_left * w_inline + interp_right * (1 - w_inline)
-        return StackingVelocity.from_points(times_union, interp_inline, inline, crossline)
-
-    def _interpolate_nearest(self, inline, crossline):
-        index = self.knn.kneighbors([(inline, crossline),], return_distance=False).item()
-        nearest_inline, nearest_crossline = self.coords[index].tolist()
-        nearest_stacking_velocity = self.stacking_velocities_dict[(nearest_inline, nearest_crossline)]
-        return StackingVelocity.from_points(nearest_stacking_velocity.times, nearest_stacking_velocity.velocities,
-                                            inline=inline, crossline=crossline)
+        interp_t = np.array([law(times_union) for law in surrounders.values()])
+        interp_xy = np.average(interp_t, 0, w)
+        return StackingVelocity.from_points(times_union, interp_xy, inline, crossline)
 
     def __call__(self, inline, crossline):
         surrounders = self.point_surrounders(inline, crossline)
         if len(surrounders) == 4:
             return self._interpolate_linear_inline_crossline(inline, crossline, surrounders)
-        elif 2 in surrounders and 3 in surrounders :
-            if surrounders[2].inline == surrounders[3].inline == inline:
-                return self._interpolate_linear_crossline(inline, crossline, surrounders)
-        elif 3 in surrounders and 4 in surrounders:
-            if surrounders[3].crossline == surrounders[4].crossline == crossline:
-                return self._interpolate_linear_inline(inline, crossline, surrounders)
         return self._interpolate_nearest(inline, crossline)
 
 
@@ -467,7 +436,7 @@ class VelocityCube:
             self.is_dirty_interpolator = True
         return self
 
-    def create_interpolator(self, max_r=100):
+    def create_interpolator(self):
         """Create velocity interpolator from stacking velocities in the cube.
 
         Notes
