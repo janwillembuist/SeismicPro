@@ -5,36 +5,37 @@ import warnings
 import numpy as np
 import cv2
 from scipy.interpolate import interp1d, LinearNDInterpolator
-from sklearn.neighbors import NearestNeighbors, KDTree
+from sklearn.neighbors import NearestNeighbors
 
 from .utils import to_list, read_vfunc, read_single_vfunc, dump_vfunc
 
 
 class VelocityInterpolator:
-    def __init__(self, stacking_velocities_dict, max_r=100):
-        self.stacking_velocities_dict = stacking_velocities_dict
-        self.coords = np.stack(list(self.stacking_velocities_dict.keys()))
-        self.laws = np.array(list(self.stacking_velocities_dict.values()))
-        self.knn = KDTree(self.coords)
-        self.max_r = max_r
+    def __init__(self, stacking_velocities_dict):
+        self.coords = np.array(list(stacking_velocities_dict.keys()))
+        self.laws = np.array(list(stacking_velocities_dict.values()))
+        
+        max_dx = np.diff(np.sort(np.unique(self.coords.T[0]))).max()
+        max_dy = np.diff(np.sort(np.unique(self.coords.T[1]))).max()
+        max_r = np.sqrt( max_dx ** 2 + max_dy ** 2)
 
-    def _az(self, x, y):
+        self.knn = NearestNeighbors(n_neighbors=1, radius=max_r)
+        self.knn.fit(self.coords)
+
+    def _azimuth(self, x, y):
         if x > 0 and y > 0: return 1
         elif x <= 0 and y > 0: return 2
         elif x <= 0 and y <= 0: return 3
         elif x > 0 and y <= 0: return 4
 
     def point_surrounders(self, inline, crossline):
-        indices, _ = self.knn.query_radius([(inline, crossline),], r=self.max_r, return_distance=True, sort_results=True)
-        coords  = self.coords[indices[0]]
-        laws = self.laws[indices[0]]
-
         surrounders = {}
-        for coord, law in zip(coords, laws):
-            centered_coord = coord - (inline, crossline)
-            az = self._az(*centered_coord)
-            if az not in surrounders: 
-                surrounders[az] = law
+        _, indices = self.knn.radius_neighbors([(inline, crossline),], return_distance=True, sort_results=True)
+        for _, ind in enumerate(indices[0]):
+            centered_coord = self.coords[ind] - (inline, crossline)
+            azimuth = self._azimuth(*centered_coord)
+            if azimuth not in surrounders: 
+                surrounders[azimuth] = self.laws[ind]
             if len(surrounders) == 4:
                 return surrounders
         return surrounders
@@ -73,7 +74,7 @@ class VelocityInterpolator:
         return StackingVelocity.from_points(times_union, interp_inline, inline, crossline)
 
     def _interpolate_nearest(self, inline, crossline):
-        index = self.knn.query([(inline, crossline),], return_distance=False).item()
+        index = self.knn.kneighbors([(inline, crossline),], return_distance=False).item()
         nearest_inline, nearest_crossline = self.coords[index].tolist()
         nearest_stacking_velocity = self.stacking_velocities_dict[(nearest_inline, nearest_crossline)]
         return StackingVelocity.from_points(nearest_stacking_velocity.times, nearest_stacking_velocity.velocities,
@@ -90,7 +91,6 @@ class VelocityInterpolator:
             if surrounders[3].crossline == surrounders[4].crossline == crossline:
                 return self._interpolate_linear_inline(inline, crossline, surrounders)
         return self._interpolate_nearest(inline, crossline)
-
 
 
 class StackingVelocity:
@@ -496,7 +496,7 @@ class VelocityCube:
             times_union = np.union1d(stacking_velocity.times, [self.tmin, self.tmax])
             stacking_velocities_dict[coord] = stacking_velocity.set_times(times_union)
 
-        self.interpolator = VelocityInterpolator(stacking_velocities_dict, max_r=max_r)
+        self.interpolator = VelocityInterpolator(stacking_velocities_dict)
         self.is_dirty_interpolator = False
         return self
 
