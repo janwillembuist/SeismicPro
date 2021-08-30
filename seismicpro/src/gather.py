@@ -877,7 +877,7 @@ class Gather:
     #------------------------------------------------------------------------#
 
     @batch_method(target="for", copy_src=False)
-    def plot(self, figsize=(10, 7), **kwargs):
+    def plot(self, figsize=(10, 7), set_title=None,  **kwargs):
         """Plot gather traces.
 
         Parameters
@@ -902,5 +902,7 @@ class Gather:
         default_kwargs.update(kwargs)
         plt.figure(figsize=figsize)
         plt.imshow(self.data.T, **default_kwargs)
+        if set_title:
+            plt.title(set_title)
         plt.show()
         return self
