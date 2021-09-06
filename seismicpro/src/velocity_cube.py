@@ -1,18 +1,18 @@
 """Implements classes for velocity analysis: StackingVelocity and VelocityCube"""
 
 import warnings
-import concurrent
-from functools import partial, lru_cache
-from collections import defaultdict
 
 import cv2
 import numpy as np
 from tqdm import tqdm
-from scipy.interpolate import interp1d, LinearNDInterpolator
+from numba.typed import Dict, List
+from scipy.interpolate import interp1d
+from scipy.spatial.qhull import Delaunay, QhullError  #pylint: disable=no-name-in-module
 from sklearn.neighbors import NearestNeighbors, KDTree
 
 from .metrics import MetricsMap
-from .utils import to_list, read_vfunc, read_single_vfunc, is_decreasing, max_std, max_mean_variation
+from .utils import (to_list, read_vfunc, read_single_vfunc, 
+                    is_decreasing, max_std, max_mean_variation, calculate_metrics)
 
 
 class VelocityInterpolator:
@@ -21,8 +21,8 @@ class VelocityInterpolator:
     Velocity interpolator accepts a dict of stacking velocities and constructs a convex hull of their coordinates.
     After that, given an inline and a crossline of unknown stacking velocity to get, interpolation is performed in the
     following way:
-    1. If spatial coordinates lie within the constructed convex hull, linear barycentric interpolation over
-       Delaunay-triangulated data is used for velocity interpolation,
+    1. If spatial coordinates lie within the constructed convex hull, linear barycentric interpolation for each time
+       over spatially Delaunay-triangulated data is calculated,
     2. Otherwise, the closest known stacking velocity in Euclidean distance is returned.
 
     Parameters
@@ -43,8 +43,8 @@ class VelocityInterpolator:
         requested coordinates.
     nearest_interpolator : NearestNeighbors
         An estimator of the closest stacking velocity to the passed spatial coordinates.
-    linear_interpolator : LinearNDInterpolator
-        Piecewise linear interploator of the velocity data passed in `stacking_velocities_dict`.
+    tri : Delaunay
+        Delaunay triangulation of `coords`.
     """
     def __init__(self, stacking_velocities_dict):
         self.stacking_velocities_dict = stacking_velocities_dict
@@ -56,32 +56,43 @@ class VelocityInterpolator:
         self.nearest_interpolator = NearestNeighbors(n_neighbors=1)
         self.nearest_interpolator.fit(self.coords)
 
-        # Create artificial stacking velocities in the corners of given coordinate grid in order for
-        # LinearNDInterpolator to work with a full rank matrix of coordinates
-        min_i, min_x = np.min(self.coords, axis=0) - 1
-        max_i, max_x = np.max(self.coords, axis=0) + 1
-        fake_velocities_coords = [(min_i, min_x), (min_i, max_x), (max_i, min_x), (max_i, max_x)]
-        fake_velocities = [self._interpolate_nearest(i, x) for i, x in fake_velocities_coords]
-        stacking_velocities = list(self.stacking_velocities_dict.values()) + fake_velocities
-        vel_data = np.concatenate([vel.interpolation_data for vel in stacking_velocities])
+        try:
+            self.tri = Delaunay(self.coords, incremental=False)
+        except QhullError:
+            # Create artificial stacking velocities in the corners of given coordinate grid in order for Delaunay to
+            # work with a full rank matrix of coordinates
+            min_i, min_x = np.min(self.coords, axis=0) - 1
+            max_i, max_x = np.max(self.coords, axis=0) + 1
+            corner_velocities_coords = [(min_i, min_x), (min_i, max_x), (max_i, min_x), (max_i, max_x)]
+            self.tri = Delaunay(np.concatenate([self.coords, corner_velocities_coords]), incremental=False)
 
-        max_t = max([law.times[-1] for law in self.stacking_velocities_dict.values()])
-        self.density = len(vel_data) / ((max_i - min_i) * (max_x - min_x) * max_t)
-
-        self.linear_interpolator = LinearNDInterpolator(vel_data[:, :-1], vel_data[:, -1], rescale=True)
-
-        # Perform the first auxilliary call of the linear_interpolator for it to work properly in different processes.
+        # Perform the first auxilliary call of the tri for it to work properly in different processes.
         # Otherwise VelocityCube.__call__ may fail if called in a pipeline with prefetch with mpc target.
-        _ = self.linear_interpolator(0, 0, 0)
+        _ = self.tri.find_simplex((0, 0))
 
     def is_in_hull(self, inline, crossline):
         """Check if given `inline` and `crossline` lie within a convex hull of spatial coordinates of stacking
         velocities passed during interpolator creation."""
         return cv2.pointPolygonTest(self.coords_hull, (inline, crossline), measureDist=True) >= 0
 
-    def _interpolate_linear(self, inline, crossline):
-        """Linearly interpolate stacking velocity at given `inline` and `crossline`."""
-        velocity_interpolator = lambda times: self.linear_interpolator(inline, crossline, times)
+    def _interpolate_barycentric(self, inline, crossline):
+        """Perform linear barycentric interpolation of stacking velocity at given `inline` and `crossline`."""
+        coords = [(inline, crossline)]
+        simplex_ix = self.tri.find_simplex(coords).item()
+        bar_coords = self.tri.transform[simplex_ix, :2].dot(np.transpose(coords - self.tri.transform[simplex_ix, 2]))
+        bar_coords = np.c_[np.transpose(bar_coords), 1 - bar_coords.sum(axis=0)][0]
+        vertices = self.tri.points[self.tri.simplices[simplex_ix]].astype(np.int32)
+
+        non_zero_coords = ~np.isclose(bar_coords, 0)
+        bar_coords = bar_coords[non_zero_coords]
+        vertices = vertices[non_zero_coords]
+        vertex_velocities = [self.stacking_velocities_dict[tuple(ver)] for ver in vertices]
+
+        def velocity_interpolator(times):
+            times = np.array(times)
+            velocities = (np.column_stack([vel(times) for vel in vertex_velocities]) * bar_coords).sum(axis=1)
+            return velocities.item() if times.ndim == 0 else velocities
+
         return StackingVelocity.from_interpolator(velocity_interpolator, inline, crossline)
 
     def _interpolate_nearest(self, inline, crossline):
@@ -96,7 +107,7 @@ class VelocityInterpolator:
         """Interpolate stacking velocity at given `inline` and `crossline`.
 
         If `inline` and `crossline` lie within a convex hull of spatial coordinates of known stacking velocities,
-        interpolate stacking velocity linearly. Otherwise return stacking velocity closest to coordinates passed.
+        perform linear barycentric interpolation. Otherwise return stacking velocity closest to coordinates passed.
 
         Parameters
         ----------
@@ -111,7 +122,7 @@ class VelocityInterpolator:
             Interpolated stacking velocity at (`inline`, `crossline`).
         """
         if self.is_in_hull(inline, crossline):
-            return self._interpolate_linear(inline, crossline)
+            return self._interpolate_barycentric(inline, crossline)
         return self._interpolate_nearest(inline, crossline)
 
 
@@ -263,21 +274,22 @@ class StackingVelocity:
         self.crossline = crossline
         return self
 
-    def set_times(self, times):
-        """Create a new `StackingVelocity` from given `times` and `velocities` recalculated as `self(times)`.
-        Coordinates of the created instance will match those of `self`.
+    def dump(self, path):
+        """Dump stacking velocities to a file in VFUNC format.
+
+        Notes
+        -----
+        See more about the format in :func:`~utils.file_utils.dump_vfunc`.
 
         Parameters
         ----------
-        times : 1d np.ndarray
-            Times to create a new stacking velocity instance for.
-
-        Returns
-        -------
-        self : StackingVelocity
-            Stacking velocities for given `times`.
+        path : str
+            A path to the created file.
         """
-        return self.from_points(times, self(times), self.inline, self.crossline)
+        if not self.has_coords or not self.has_points:
+            raise ValueError("StackingVelocity instance can be dumped only if it was created from time and velocity "
+                             "pairs with not-None inline and crossline")
+        dump_vfunc(path, [(self.inline, self.crossline, self.times, self.velocities)])
 
     @property
     def has_points(self):
@@ -288,16 +300,6 @@ class StackingVelocity:
     def has_coords(self):
         """bool: Whether stacking velocity inline and crossline are not-None."""
         return (self.inline is not None) and (self.crossline is not None)
-
-    @property
-    def interpolation_data(self):
-        """2d np.ndarray with 4 columns: data to be passed to `VelocityInterpolator`. First two columns store
-        duplicated inline and crossline, while two last store time-velocity pairs."""
-        if not self.has_coords or not self.has_points:
-            raise ValueError("Interpolation data can be obtained only for stacking velocities created from time and "
-                             "velocity pairs with not-None inline and crossline")
-        coords = [self.get_coords()] * len(self.times)
-        return np.concatenate([coords, self.times.reshape(-1, 1), self.velocities.reshape(-1, 1)], axis=1)
 
     def get_coords(self):
         """Get spatial coordinates of the stacking velocity.
@@ -310,7 +312,7 @@ class StackingVelocity:
         return (self.inline, self.crossline)
 
     def __call__(self, times):
-        """Returns stacking velocities for given `times`.
+        """Return stacking velocities for given `times`.
 
         Parameters
         ----------
@@ -368,15 +370,11 @@ class VelocityCube:
 
     Parameters
     ----------
-    path : str. optional
+    path : str, optional
         A path to the source file with vertical functions to load the cube from. If not given, an empty cube is
         created.
-    tmin : float, optional, defaults to 0
-        Start time to clip all stacking velocities with to ensure that the convex hull of the point cloud passed to
-        `LinearNDInterpolator` covers all timestamps for all spatial coordinates. Measured in milliseconds.
-    tmax : float, optional, defaults to 6000
-        End time to clip all stacking velocities with to ensure that the convex hull of the point cloud passed to
-        `LinearNDInterpolator` covers all timestamps for all spatial coordinates. Measured in milliseconds.
+    create_interpolator : bool, optional, defaults to True
+        Whether to create an interpolator immediately if the cube was loaded from a file.
 
     Attributes
     ----------
@@ -387,21 +385,15 @@ class VelocityCube:
         Velocity interpolator over the field.
     is_dirty_interpolator : bool
         Whether the cube was updated after the interpolator was created.
-    tmin : float, optional, defaults to 0
-        Start time to clip all stacking velocities with to ensure that the convex hull of the point cloud passed to
-        `LinearNDInterpolator` covers all timestamps for all spatial coordinates. Measured in milliseconds.
-    tmax : float, optional, defaults to 6000
-        End time to clip all stacking velocities with to ensure that the convex hull of the point cloud passed to
-        `LinearNDInterpolator` covers all timestamps for all spatial coordinates. Measured in milliseconds.
     """
-    def __init__(self, path=None, tmin=0, tmax=6000):
+    def __init__(self, path=None, create_interpolator=True):
         self.stacking_velocities_dict = {}
         self.interpolator = None
         self.is_dirty_interpolator = True
-        self.tmin = tmin
-        self.tmax = tmax
         if path is not None:
             self.load(path)
+            if create_interpolator:
+                self.create_interpolator()
 
     @property
     def has_interpolator(self):
@@ -431,6 +423,23 @@ class VelocityCube:
             self.stacking_velocities_dict[(inline, crossline)] = stacking_velocity
         self.is_dirty_interpolator = True
         return self
+
+    def dump(self, path):
+        """Dump all the vertical functions of the cube to a file in VFUNC format.
+
+        Notes
+        -----
+        See more about the format in :func:`~utils.file_utils.dump_vfunc`.
+
+        Parameters
+        ----------
+        path : str
+            A path to the created file.
+        """
+        vfunc_list = []
+        for (inline, crossline), stacking_velocity in self.stacking_velocities_dict.items():
+            vfunc_list.append((inline, crossline, stacking_velocity.times, stacking_velocity.velocities))
+        dump_vfunc(path, vfunc_list)
 
     def update(self, stacking_velocities):
         """Update a velocity cube with given stacking velocities.
@@ -471,11 +480,6 @@ class VelocityCube:
     def create_interpolator(self):
         """Create velocity interpolator from stacking velocities in the cube.
 
-        Notes
-        -----
-        Time range of all stacking velocities in the cube will be set to [`tmin`, `tmax`] to ensure that the convex
-        hull of the point cloud passed to `LinearNDInterpolator` covers all timestamps for all spatial coordinates.
-
         Returns
         -------
         self : VelocityCube
@@ -489,15 +493,7 @@ class VelocityCube:
         """
         if not self.stacking_velocities_dict:
             raise ValueError("No stacking velocities passed")
-
-        # Set the time range of all stacking velocities to [tmin, tmax] in order to ensure that the convex hull of the
-        # point cloud passed to LinearNDInterpolator covers all timestamps from tmin to tmax
-        stacking_velocities_dict = {}
-        for coord, stacking_velocity in self.stacking_velocities_dict.items():
-            times_union = np.union1d(stacking_velocity.times, [self.tmin, self.tmax])
-            stacking_velocities_dict[coord] = stacking_velocity.set_times(times_union)
-
-        self.interpolator = VelocityInterpolator(stacking_velocities_dict)
+        self.interpolator = VelocityInterpolator(self.stacking_velocities_dict)
         self.is_dirty_interpolator = False
         return self
 
@@ -600,56 +596,12 @@ class VelocityCube:
             : Dict
            Calculated metrics
         """
-        from numba import njit, prange, literal_unroll
-        from numba.typed import Dict, List
-        from itertools import repeat
-
         velocity_cube = Dict()
         for law in laws:
-           velocity_cube[law.inline, law.crossline] = law(times_to_interpolate)
-
-        # def fill_velo(law, times_to_interpolate):
-        #     return law(times_to_interpolate)
-        # fill_velo = partial(fill_velo, times_to_interpolate=times_to_interpolate)
-        # with concurrent.futures.ProcessPoolExecutor(max_workers=80) as executor:
-        #     res = executor.map(fill_velo, laws, repeat(times_to_interpolate))
-        
-        # for law, r in zip(laws, res):
-        #     velocity_cube[law.inline, law.crossline] = r
-        
-        
+            velocity_cube[law.inline, law.crossline] = law(times_to_interpolate)
 
         knn = KDTree(coords)
-        @njit(parallel=False, fastmath=True, nogil=True)
-        def f(windows_indices, func, velocity_cube, metrics):
-            N = len(windows_indices)
-            res = np.empty(N)
-            for i in range(N):
-                window_indices = windows_indices[i]
-                window_coords = coords[window_indices]
-                window_velocities = np.empty((len(window_coords), 3000))
-                for j in range(len(window_coords)):
-                    x, y = window_coords[j]
-                    window_velocities[j] = velocity_cube[x, y]
-    
-                # for k in range(len(funcs)):
-                #     win_agg_func = funcs[k]
-                val = func(window_velocities)
-                #     res[k] = val
-                res[i] = val
-            return res
-    
         windows_indices, _ = knn.query_radius(coords, r, return_distance=True, sort_results=True)
-        #windows_indices = List(windows_indices)
-        windows_indices = np.split(windows_indices, np.arange(size, len(windows_indices), size))
-        windows_indices = [List(i) for i in windows_indices]
-        metrics = Dict()
-        metrics[100, 100] = 1.
-        # #funcs = List([self.QC_WIN_AGG_FUNCS[metric_name] for metric_name in metrics_names])
-
-        f = partial(f, func=max_mean_variation, velocity_cube=velocity_cube, metrics=metrics)
-        # #f(windows_indices)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=80) as executor:
-            res = executor.map(f, windows_indices)
-        res = np.concatenate(list(res))
-        return res
+        funcs = tuple(self.QC_WIN_AGG_FUNCS[metric_name] for metric_name in metrics_names)
+        metrics_values = calculate_metrics(List(windows_indices), coords, velocity_cube, funcs)
+        return dict(zip(metrics_names, metrics_values.T))

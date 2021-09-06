@@ -241,9 +241,12 @@ def clip(data, data_min, data_max):
     return data.reshape(data_shape)
 
 
-@njit(nogil=True)
+@njit('int32(float64[:, ::1])', nogil=True)
 def is_decreasing(window):
-    return (np.diff(window[0]) < 1e-6).any()
+    for i in range(window.shape[1] - 1):
+        if window[0, i] > window[0, i+1]:
+            return 1
+    return 0
 
 
 @njit(nogil=True)
@@ -262,3 +265,19 @@ def max_mean_variation(window):
         current_mean_var = (np.mean(window[:, i]) - window[0, i]) / window[0, i]
         max_mean_var = max(max_mean_var, current_mean_var)
     return max_mean_var
+
+
+@njit(parallel=True, fastmath=True, nogil=True)
+def calculate_metrics(windows_indices, coords, velocity_cube, funcs):
+    res = np.empty((len(windows_indices), len(funcs)))
+    for i in prange(len(windows_indices)):
+        window_indices = windows_indices[i]
+        window_coords = coords[window_indices]
+        window_velocities = np.empty((len(window_coords), 3000))
+        for j in range(len(window_coords)):
+            x, y = window_coords[j]
+            window_velocities[j] = velocity_cube[x, y]
+        for k in range(len(funcs)):
+            win_agg_func = funcs[k]
+            res[i, k] = win_agg_func(window_velocities)
+    return res
