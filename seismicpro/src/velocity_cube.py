@@ -575,7 +575,7 @@ class VelocityCube:
     }
     
     def calculate_window_metrics(self, laws, coords, times_to_interpolate, metrics_names=QC_WIN_AGG_FUNCS.keys(), 
-                                 r=10, bar=False):
+                                 r=10, bar=False, size=10):
         """ For each velocity law finds it's neighbors within window `r`, then calculates window-based metrics,
         see the QC_WIN_AGG_FUNCS for available metrics.  
 
@@ -600,21 +600,56 @@ class VelocityCube:
             : Dict
            Calculated metrics
         """
-        velocity_cube = {}
-        def _fill_velocities(law, times=times_to_interpolate):
-            velocity_cube[law.inline, law.crossline] = law(times)
+        from numba import njit, prange, literal_unroll
+        from numba.typed import Dict, List
+        from itertools import repeat
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=80) as executor:
-            executor.map(_fill_velocities, laws)
+        velocity_cube = Dict()
+        for law in laws:
+           velocity_cube[law.inline, law.crossline] = law(times_to_interpolate)
+
+        # def fill_velo(law, times_to_interpolate):
+        #     return law(times_to_interpolate)
+        # fill_velo = partial(fill_velo, times_to_interpolate=times_to_interpolate)
+        # with concurrent.futures.ProcessPoolExecutor(max_workers=80) as executor:
+        #     res = executor.map(fill_velo, laws, repeat(times_to_interpolate))
         
-        metrics = defaultdict(list)
+        # for law, r in zip(laws, res):
+        #     velocity_cube[law.inline, law.crossline] = r
+        
+        
+
         knn = KDTree(coords)
+        @njit(parallel=False, fastmath=True, nogil=True)
+        def f(windows_indices, func, velocity_cube, metrics):
+            N = len(windows_indices)
+            res = np.empty(N)
+            for i in range(N):
+                window_indices = windows_indices[i]
+                window_coords = coords[window_indices]
+                window_velocities = np.empty((len(window_coords), 3000))
+                for j in range(len(window_coords)):
+                    x, y = window_coords[j]
+                    window_velocities[j] = velocity_cube[x, y]
+    
+                # for k in range(len(funcs)):
+                #     win_agg_func = funcs[k]
+                val = func(window_velocities)
+                #     res[k] = val
+                res[i] = val
+            return res
+    
         windows_indices, _ = knn.query_radius(coords, r, return_distance=True, sort_results=True)
-        for window_indices in tqdm(windows_indices, disable=not bar):
-            window_coords = coords[window_indices]
-            window_velocities = np.vstack([velocity_cube[coord[0], coord[1]] for coord in window_coords])
-            for metric_name in metrics_names:
-                win_agg_func = self.QC_WIN_AGG_FUNCS[metric_name]
-                val = win_agg_func(window_velocities)
-                metrics[metric_name].append(val)
-        return metrics
+        #windows_indices = List(windows_indices)
+        windows_indices = np.split(windows_indices, np.arange(size, len(windows_indices), size))
+        windows_indices = [List(i) for i in windows_indices]
+        metrics = Dict()
+        metrics[100, 100] = 1.
+        # #funcs = List([self.QC_WIN_AGG_FUNCS[metric_name] for metric_name in metrics_names])
+
+        f = partial(f, func=max_mean_variation, velocity_cube=velocity_cube, metrics=metrics)
+        # #f(windows_indices)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=80) as executor:
+            res = executor.map(f, windows_indices)
+        res = np.concatenate(list(res))
+        return res
