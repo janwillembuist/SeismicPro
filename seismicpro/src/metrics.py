@@ -1,16 +1,19 @@
-"""Implements MetricsMap class for metric visualization over a field map"""
+"""Implements MetricsAccumulator class for metrics accumulation over batches and MetricMap class for metric
+visualization over a field map"""
 
 # pylint: disable=no-name-in-module, import-error
-import inspect
-
 import numpy as np
-from numba import njit, prange
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib import colors as mcolors
+from ipywidgets import widgets
+from IPython.display import display
 
-from .utils import plot_metrics_map
+from .utils import to_list, plot_metrics_map
 from ..batchflow.models.metrics import Metrics
 
 
-class MetricsMap(Metrics):
+class MetricsAccumulator(Metrics):
     """Accumulate metric values and their coordinates to further aggregate them into a metrics map.
 
     Parameters
@@ -32,19 +35,8 @@ class MetricsMap(Metrics):
 
     Attributes
     ----------
-    attribute_names : tuple
-        Names of passed metrics and coords.
-    coords : 2d np.ndarray
+    metrics_list : pd.DataFrame
         An array with shape (N, 2) which contains X and Y coordinates for each corresponding metric value.
-    DEFAULT_METRICS : dict
-        A dictionary of aggregation functions within a bin. Available functions include:
-            - std
-            - min
-            - max
-            - mean
-            - quantile
-            - absquantile
-    kwargs keys : np.ndarray
         All keys from `kwargs` become instance attributes and contain the corresponding metric values.
 
     Raises
@@ -58,16 +50,6 @@ class MetricsMap(Metrics):
         If given coordinates are not array-like.
         If given metrics are not array-like.
     """
-    DEFAULT_METRICS = {
-        'std' : njit(lambda array: np.nanstd(array)),
-        'max' : njit(lambda array: np.nanmax(array)),
-        'min' : njit(lambda array: np.nanmin(array)),
-        'mean' : njit(lambda array: np.nanmean(array)),
-        'median' : njit(lambda array: np.nanmedian(array)),
-        'quantile' : njit(lambda array, q: np.nanquantile(array, q=q)),
-        'absquantile' : njit(lambda array, q: np.nanquantile(np.abs(array - np.nanmean(array)), q))
-    }
-
     def __init__(self, coords, **kwargs):
         super().__init__()
 
@@ -85,38 +67,58 @@ class MetricsMap(Metrics):
         if coords.shape[1] != 2:
             raise ValueError("Coordinates array must have shape (N, 2), where N is the number of elements"
                              f" but an array with shape {coords.shape} was given")
-        self.coords = coords
 
-        # Create attributes with metric values
-        for name, metrics in kwargs.items():
-            if not isinstance(metrics, (list, tuple, np.ndarray)):
-                raise TypeError(f"'{name}' metric must be array-like but {type(metrics)} received.")
-            metrics = np.asarray(metrics)
+        # Create a DataFrame with current metric values
+        curr_metrics = pd.DataFrame({"x": coords[:, 0], "y": coords[:, 1]})
+        for metric_name, metric_values in kwargs.items():
+            if not isinstance(metric_values, (list, tuple, np.ndarray)):
+                raise TypeError(f"'{metric_name}' metric value must be array-like but {type(metric_values)} received")
+            metric_values = np.asarray(metric_values)
 
-            # If metrics is a 1d array with numeric dtype, convert it to a 2d array to unify further computation logic
-            # with the case when metrics is an array of arrays
-            if not isinstance(metrics[0], (list, tuple, np.ndarray)):
-                metrics = metrics.reshape(-1, 1)
-            if len(self.coords) != len(metrics):
-                raise ValueError(f"The length of {name} metric array must match the length of coordinates array "
-                                 f"({len(self.coords)}) but equals {len(metrics)}")
-            setattr(self, name, metrics)
+            if len(curr_metrics) != len(metric_values):
+                raise ValueError(f"The length of {metric_name} metric array must match the length of coordinates "
+                                 f"array ({len(curr_metrics)}) but equals {len(metric_values)}")
+            curr_metrics[metric_name] = metric_values
 
-        self.attribute_names = ('coords',) + tuple(kwargs.keys())
+        self.metrics_names = sorted(kwargs.keys())
+        self.metrics_list = [curr_metrics]
+        self.map_kwargs = {}
 
-        # The dictionary stores functions to aggregate the resulting metrics map
-        self._agg_fn_dict = {'mean': np.nanmean,
-                             'max': np.nanmax,
-                             'min': np.nanmin}
+    @property
+    def metrics(self):
+        if len(self.metrics_list) > 1:
+            self.metrics_list = [pd.concat(self.metrics_list, ignore_index=True)]
+        return self.metrics_list[0]
 
-    def append(self, metrics):
-        """Append coordinates and metrics to the global container."""
-        for name in self.attribute_names:
-            updated_metrics = np.concatenate([getattr(self, name), getattr(metrics, name)])
-            setattr(self, name, updated_metrics)
+    def append(self, other):
+        """Append coordinates and metric values to the global container."""
+        self.metrics_names = sorted(set(self.metrics_names + other.metrics_names))
+        self.metrics_list += other.metrics_list
 
-    def construct_map(self, metric_name, bin_size=500, agg_func='mean', agg_func_kwargs=None, plot=True,
-                      **plot_kwargs):
+    def memorize_map_kwargs(self, **kwargs):
+        self.map_kwargs = kwargs
+
+    def _process_metrics_agg(self, metrics, agg):
+        is_single_metric = isinstance(metrics, str)
+        metrics = to_list(metrics) if metrics is not None else self.metrics_names
+
+        agg = to_list(agg)
+        if len(agg) == 1:
+            agg *= len(metrics)
+        if len(agg) != len(metrics):
+            raise ValueError("The number of aggregation functions must match the length of metrics to calculate")
+
+        return metrics, agg, is_single_metric
+
+    def evaluate(self, metrics=None, agg="mean"):
+        metrics, agg, is_single_metric = self._process_metrics_agg(metrics, agg)
+        metrics_vals = [self.metrics[metric].dropna().explode().agg(agg_func)
+                        for metric, agg_func in zip(metrics, agg)]
+        if is_single_metric:
+            return metrics_vals[0]
+        return metrics_vals
+
+    def construct_map(self, metrics=None, agg="mean", bin_size=500, **map_kwargs):
         """Calculate and optionally plot a metrics map.
 
         The map is constructed in the following way:
@@ -158,107 +160,179 @@ class MetricsMap(Metrics):
             If `agg_func` is `str` and is not in DEFAULT_METRICS.
             If `agg_func` is not wrapped with `njit` decorator.
         """
-        metrics = getattr(self, metric_name)
-
-        # Handle the case when metric is an array of arrays by flattening the metrics array and duplicating the coords
-        coords_repeats = [len(metrics_array) for metrics_array in metrics]
-        coords = np.repeat(self.coords, coords_repeats, axis=0)
-        metrics = np.concatenate(metrics)
-
-        coords_x = np.array(coords[:, 0], dtype=np.int32)
-        coords_y = np.array(coords[:, 1], dtype=np.int32)
-        metrics = np.array(metrics, dtype=np.float32)
-
+        metrics, agg, is_single_metric = self._process_metrics_agg(metrics, agg)
         if isinstance(bin_size, (int, float, np.number)):
             bin_size = (bin_size, bin_size)
 
-        # Parse passed agg_func and check whether it is njitted.
-        if isinstance(agg_func, str):
-            agg_func = self.DEFAULT_METRICS.get(agg_func, agg_func)
-            if not callable(agg_func):
-                err_msg = "'{}' is not a valid aggregation function. Available options are: '{}'"
-                raise ValueError(err_msg.format(agg_func, "', '".join(self.DEFAULT_METRICS.keys())))
-        elif not callable(agg_func):
-            raise TypeError(f"'agg_func' should be either str or callable, not {type(agg_func)}")
+        # Binarize metrics for further aggregation into maps
+        metrics_df = self.metrics.copy(deep=False)
+        metrics_df["x_bin"] = ((metrics_df["x"] - metrics_df["x"].min()) // bin_size[0]).astype(np.int32)
+        metrics_df["y_bin"] = ((metrics_df["y"] - metrics_df["y"].min()) // bin_size[1]).astype(np.int32)
+        x_range = metrics_df["x_bin"].max() + 1
+        y_range = metrics_df["y_bin"].max() + 1
+        metrics_df = metrics_df.set_index(["x_bin", "y_bin", "x", "y"]).sort_index()
 
-        if not hasattr(agg_func, 'py_func'):
-            raise ValueError("It seems that the aggregation function is not njitted. "\
-                             "Please wrap the function with @njit decorator.")
+        metrics_maps = []
+        for metric, agg_func in zip(metrics, agg):
+            metric_df = metrics_df[metric].dropna().explode()
 
-        # Convert passed agg_func kwargs to args since numba does not support kwargs unpacking and construct the map
-        agg_func_kwargs = {} if agg_func_kwargs is None else agg_func_kwargs
-        agg_func_args = self._kwargs_to_args(agg_func.py_func, **agg_func_kwargs)
-        metrics_map = self.construct_metrics_map(coords_x=coords_x, coords_y=coords_y, metrics=metrics,
-                                                 bin_size=bin_size, agg_func=agg_func, agg_func_args=agg_func_args)
+            metric_agg = metric_df.groupby(["x_bin", "y_bin"]).agg(agg_func)
+            x = metric_agg.index.get_level_values(0)
+            y = metric_agg.index.get_level_values(1)
+            metric_map = np.full((x_range, y_range), fill_value=np.nan)
+            metric_map[x, y] = metric_agg
 
-        if plot:
-            ticks_range_x = [coords_x.min(), coords_x.max()]
-            ticks_range_y = [coords_y.min(), coords_y.max()]
-            plot_metrics_map(metrics_map=metrics_map, ticks_range_x=ticks_range_x, ticks_range_y=ticks_range_y,
-                             **plot_kwargs)
-        return metrics_map
+            bin_to_coords = metric_df.groupby(["x_bin", "y_bin", "x", "y"]).agg(agg_func)
+            bin_to_coords = bin_to_coords.to_frame().reset_index(level=["x", "y"]).groupby(["x_bin", "y_bin"])
 
-    @staticmethod
-    def _kwargs_to_args(func, **kwargs):
-        """Convert function kwargs to args.
+            agg_func = agg_func.__name__ if callable(agg_func) else agg_func
+            extra_map_kwargs = {**self.map_kwargs.get(metric, {}), **map_kwargs.get(metric, {})}
+            metric_map = MetricMap(metric_map, bin_to_coords, metric, agg_func, bin_size, **extra_map_kwargs)
+            metrics_maps.append(metric_map)
 
-        Currently, `numba` does not support kwargs unpacking but allows for unpacking args. That's why `kwargs` are
-        transformed into `args` before the call with the first argument omitted even if it was set by `kwargs` since
-        it will be passed automatically during the metrics map calculation.
+        if is_single_metric:
+            return metrics_maps[0]
+        return metrics_maps
 
-        Parameters
-        ----------
-        func : callable
-            Function to create positional arguments for.
-        kwargs : misc, optional
-            Keyword arguments to `func`.
 
-        Returns
-        -------
-        args : tuple
-            Positional arguments to `func` except for the first argument.
-        """
-        params = inspect.signature(func).parameters
-        args = [kwargs.get(name, param.default) for name, param in params.items()][1:]
-        params_names = list(params.keys())[1:]
-        empty_params = [name for name, arg in zip(params_names, args) if arg == inspect.Parameter.empty]
-        if empty_params:
-            raise ValueError(f"Missing values to {', '.join(empty_params)} argument(s)")
-        return tuple(args)
+class MetricMap:
+    def __init__(self, metric_map, bin_to_coords, metric, agg, bin_size, **extra_map_kwargs):
+        self.metric_map = metric_map
+        self.bin_to_coords = bin_to_coords
+        self.metric = metric
+        self.agg = agg
+        self.bin_size = bin_size
+        self.extra_map_kwargs = extra_map_kwargs
 
-    @staticmethod
-    @njit(parallel=True)
-    def construct_metrics_map(coords_x, coords_y, metrics, bin_size, agg_func, agg_func_args):
-        """Calculate metrics map.
+    def plot(self, interactive=False, **kwargs):
+        title = f"{self.agg}({self.metric}) in {self.bin_size} bins"
+        if not interactive:
+            plot_metrics_map(metrics_map=self.metric_map.T)
+        else:
+            MapViewer(self, title=title, **self.extra_map_kwargs, **kwargs).plot()
 
-        Parameters
-        ----------
-        coords_x : 1d np.ndarray
-            Metrics coordinates for X axis.
-        coords_y : 1d np.ndarray
-            Metrics coordinates for Y axis.
-        metrics : 1d np.ndarray
-            Metric values for corresponding coordinates.
-        bin_size : tuple with length 2
-            Bin size for X and Y axes.
-        agg_func : njitted callable
-            Aggregation function, whose first argument is a 1d np.ndarray containing metric values in a bin.
-        agg_func_args : tuple
-            Additional positional arguments to `agg_func`.
 
-        Returns
-        -------
-        metrics_map : 2d np.ndarray
-            A map with aggregated metric values.
-        """
-        bin_size_x, bin_size_y = bin_size
-        range_x = np.arange(coords_x.min(), coords_x.max() + 1, bin_size_x)
-        range_y = np.arange(coords_y.min(), coords_y.max() + 1, bin_size_y)
-        metrics_map = np.full((len(range_y), len(range_x)), np.nan)
-        for i in prange(len(range_x)):  #pylint: disable=not-an-iterable
-            for j in prange(len(range_y)):  #pylint: disable=not-an-iterable
-                mask = ((coords_x - range_x[i] >= 0) & (coords_x - range_x[i] < bin_size_x) &
-                        (coords_y - range_y[j] >= 0) & (coords_y - range_y[j] < bin_size_y))
-                if np.any(mask):
-                    metrics_map[j, i] = agg_func(metrics[mask], *agg_func_args)
-        return metrics_map
+class MapViewer:
+    def __init__(self, metric_map, on_click_handler, title, is_lower_better=True, map_size=(4, 4), aux_size=(4, 4)):
+        self.metric_map = metric_map
+        self.on_click_handler = on_click_handler
+        self.is_desc = is_lower_better
+
+        # Current map state
+        self.click_point = None
+        self.curr_coords = None
+        self.curr_ix = None
+
+        # Figure setup
+        self.output = widgets.Output()
+        with self.output:
+            self.map_fig, self.map_ax = plt.subplots(figsize=map_size, constrained_layout=True)
+            self.aux_fig, self.aux_ax = plt.subplots(figsize=aux_size, constrained_layout=True)
+
+        self.map_fig.canvas.toolbar_visible = False
+        self.aux_fig.canvas.toolbar_visible = False
+        self.map_fig.canvas.header_visible = False
+        self.aux_fig.canvas.header_visible = False
+
+        # Layout definition
+        text_layout = widgets.Layout(height="35px", display="flex", justify_content="center", width="95%")
+        button_layout = widgets.Layout(height="35px", width="35px", min_width="35px")
+
+        # Widget definition
+        title_style = "<style>p{word-wrap:normal; text-align:center; font-size:14px}</style>"
+        self.title = widgets.HTML(value=f"{title_style} <b><p>{title}</p></b>", layout=text_layout)
+        self.sort = widgets.Button(icon=self.sort_icon, layout=button_layout)
+        self.prev = widgets.Button(icon="angle-left", layout=button_layout)
+        self.drop = widgets.Dropdown(layout=text_layout)
+        self.next = widgets.Button(icon="angle-right", layout=button_layout)
+        self.buttons = widgets.HBox([self.sort, self.prev, self.drop, self.next])
+
+        # Map layout
+        self.figure_box = widgets.HBox([widgets.VBox([self.title, self.map_fig.canvas]),
+                                        widgets.VBox([self.buttons, self.aux_fig.canvas])])
+
+        # Handler definition
+        self.sort.on_click(self.reverse_coords)
+        self.prev.on_click(self.prev_coords)
+        self.drop.observe(self.select_coords, names="value")
+        self.next.on_click(self.next_coords)
+        self.map_fig.canvas.mpl_connect("button_press_event", self.map_on_click)
+
+    @property
+    def sort_icon(self):
+        return "sort-amount-desc" if self.is_desc else "sort-amount-asc"
+
+    def gen_drop_options(self, coords):
+        return [f"({x}, {y}) - {metric:.05f}" for x, y, metric in coords.itertuples(index=False)]
+
+    def redraw_aux(self):
+        curr_x, curr_y = self.curr_coords.iloc[self.curr_ix][["x", "y"]]
+        self.aux_ax.clear()
+        self.on_click_handler(curr_x, curr_y, self.aux_ax)
+
+    def update_drop(self, ix, coords=None):
+        self.drop.unobserve(self.select_coords, names="value")
+        with self.drop.hold_sync():
+            if coords is not None:
+                self.drop.options = self.gen_drop_options(coords)
+            self.drop.index = ix
+        self.drop.observe(self.select_coords, names="value")
+
+    def update_state(self, ix, coords=None, redraw=True):
+        self.curr_ix = ix
+        if coords is not None:
+            self.curr_coords = coords
+        self.update_drop(ix, coords)
+        self.toggle_prev_next_buttons()
+        if redraw:
+            self.redraw_aux()
+
+    def toggle_prev_next_buttons(self):
+        self.prev.disabled = (self.curr_ix == 0)
+        self.next.disabled = (self.curr_ix == (len(self.curr_coords) - 1))
+
+    def reverse_coords(self, event):
+        self.is_desc = not self.is_desc
+        self.sort.icon = self.sort_icon
+        self.update_state(len(self.curr_coords) - self.curr_ix - 1, self.curr_coords.iloc[::-1], redraw=False)
+
+    def next_coords(self, event):
+        self.update_state(min(self.curr_ix + 1, len(self.curr_coords) - 1))
+
+    def prev_coords(self, event):
+        self.update_state(max(self.curr_ix - 1, 0))
+
+    def select_coords(self, change):
+        self.update_state(self.drop.index)
+
+    def process_click(self, *click_coords):
+        # Handle clicks on an empty area
+        if click_coords not in self.metric_map.bin_to_coords.groups:
+            return
+
+        if self.click_point is not None:
+            self.click_point.remove()
+        self.click_point = self.map_ax.scatter(*click_coords, color="black", marker="+")
+
+        coords = self.metric_map.bin_to_coords.get_group(click_coords)
+        coords = coords.sort_values(self.metric_map.metric, ascending=not self.is_desc)
+        self.update_state(0, coords)
+
+    def map_on_click(self, event):
+        # Handle clicks outside the map
+        if not event.inaxes == self.map_ax:
+            return
+        self.process_click(int(event.xdata + 0.5), int(event.ydata + 0.5))
+
+    def plot(self):
+        display(self.figure_box)
+
+        # Plot metric map
+        colors = ((0.0, 0.6, 0.0), (.66, 1, 0), (0.9, 0.0, 0.0))
+        cmap = mcolors.LinearSegmentedColormap.from_list("cmap", colors)
+        self.map_ax.imshow(self.metric_map.metric_map.T, origin="lower", cmap=cmap, aspect="auto", interpolation="None")
+
+        # Init aux plot with the worst metric value
+        func = np.nanargmax if self.is_desc else np.nanargmin
+        init_x, init_y = np.unravel_index(func(self.metric_map.metric_map), self.metric_map.metric_map.shape)
+        self.process_click(init_x, init_y)

@@ -47,8 +47,6 @@ def plot_metrics_map(metrics_map, cmap=None, title=None, figsize=(10, 7),  # pyl
     if cmap is None:
         colors = ((0.0, 0.6, 0.0), (.66, 1, 0), (0.9, 0.0, 0.0))
         cmap = mcolors.LinearSegmentedColormap.from_list('cmap', colors)
-        cmap.set_under('black')
-        cmap.set_over('red')
 
     origin = kwargs.pop('origin', 'lower')
     aspect = kwargs.pop('aspect', 'auto')

@@ -10,7 +10,7 @@ from numba import njit, prange
 from scipy.spatial.qhull import Delaunay, QhullError  #pylint: disable=no-name-in-module
 from sklearn.neighbors import NearestNeighbors
 
-from .metrics import MetricsMap
+from .metrics import MetricsAccumulator
 from .utils import to_list, read_vfunc, read_single_vfunc, dump_vfunc, velocity_qc
 from .utils.interpolation import interp1d
 
@@ -666,4 +666,27 @@ class VelocityCube:
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
             metrics = executor.map(calculate_window_metrics, windows_indices)
         metrics = {func.__name__: np.array(val) for func, val in zip(metrics_funcs, zip(*metrics))}
-        return MetricsMap(coords, **metrics)
+
+        def plot_central_velocity(x, y, ax):
+            velocity_ix = coords_knn.kneighbors([[x, y]], n_neighbors=1, return_distance=False)[0, 0]
+            ax.plot(velocities[velocity_ix], times)
+            ax.invert_yaxis()
+
+        def plot_neighbouring_velocities(x, y, ax):
+            _, (window_indices,) = coords_knn.radius_neighbors([[x, y]], return_distance=True, sort_results=True)
+            window_velocities = velocities[window_indices]
+            for vel in window_velocities:
+                ax.plot(vel, times)
+            ax.invert_yaxis()
+
+        default_map_kwargs = {
+            "on_click_handler": plot_neighbouring_velocities,
+        }
+
+        map_kwargs = {
+            "is_decreasing": {"on_click_handler": plot_central_velocity},
+        }
+
+        metrics_acc = MetricsAccumulator(coords, **metrics)
+        metrics_acc.memorize_map_kwargs(**{name: map_kwargs.get(name, default_map_kwargs) for name in metrics_names})
+        return metrics_acc
