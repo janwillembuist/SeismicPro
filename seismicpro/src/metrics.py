@@ -1,15 +1,13 @@
-"""Implements MetricsAccumulator class for metrics accumulation over batches and MetricMap class for metric
-visualization over a field map"""
+"""Implements MetricsAccumulator class for collecting metrics calculated for individual batches and MetricMap class for
+a particular metric visualization over a field map"""
 
 # pylint: disable=no-name-in-module, import-error
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import colors as mcolors
-from ipywidgets import widgets
-from IPython.display import display
 
-from .utils import to_list, plot_metrics_map
+from .utils import to_list, set_ticks
 from ..batchflow.models.metrics import Metrics
 
 
@@ -168,10 +166,15 @@ class MetricsAccumulator(Metrics):
         metrics_df = self.metrics.copy(deep=False)
         metrics_df["x_bin"] = ((metrics_df["x"] - metrics_df["x"].min()) // bin_size[0]).astype(np.int32)
         metrics_df["y_bin"] = ((metrics_df["y"] - metrics_df["y"].min()) // bin_size[1]).astype(np.int32)
-        x_range = metrics_df["x_bin"].max() + 1
-        y_range = metrics_df["y_bin"].max() + 1
+        x_bin_max = metrics_df["x_bin"].max()
+        y_bin_max = metrics_df["y_bin"].max()
+        x_bin_range = [metrics_df["x"].min() + bin_size[0] // 2,
+                       metrics_df["x"].min() + bin_size[0] // 2 + bin_size[0] * x_bin_max]
+        y_bin_range = [metrics_df["y"].min() + bin_size[1] // 2,
+                       metrics_df["y"].min() + bin_size[1] // 2 + bin_size[1] * y_bin_max]
         metrics_df = metrics_df.set_index(["x_bin", "y_bin", "x", "y"]).sort_index()
 
+        # Group metrics by generated bins and create maps
         metrics_maps = []
         for metric, agg_func in zip(metrics, agg):
             metric_df = metrics_df[metric].dropna().explode()
@@ -179,7 +182,7 @@ class MetricsAccumulator(Metrics):
             metric_agg = metric_df.groupby(["x_bin", "y_bin"]).agg(agg_func)
             x = metric_agg.index.get_level_values(0)
             y = metric_agg.index.get_level_values(1)
-            metric_map = np.full((x_range, y_range), fill_value=np.nan)
+            metric_map = np.full((x_bin_max + 1, y_bin_max + 1), fill_value=np.nan)
             metric_map[x, y] = metric_agg
 
             bin_to_coords = metric_df.groupby(["x_bin", "y_bin", "x", "y"]).agg(agg_func)
@@ -187,7 +190,8 @@ class MetricsAccumulator(Metrics):
 
             agg_func = agg_func.__name__ if callable(agg_func) else agg_func
             extra_map_kwargs = {**self.map_kwargs.get(metric, {}), **map_kwargs.get(metric, {})}
-            metric_map = MetricMap(metric_map, bin_to_coords, metric, agg_func, bin_size, **extra_map_kwargs)
+            metric_map = MetricMap(metric_map, bin_to_coords, x_bin_range, y_bin_range, metric, agg_func, bin_size,
+                                   **extra_map_kwargs)
             metrics_maps.append(metric_map)
 
         if is_single_metric:
@@ -196,26 +200,68 @@ class MetricsAccumulator(Metrics):
 
 
 class MetricMap:
-    def __init__(self, metric_map, bin_to_coords, metric, agg, bin_size, **extra_map_kwargs):
+    def __init__(self, metric_map, bin_to_coords, x_bin_range, y_bin_range, metric, agg, bin_size, **extra_map_kwargs):
         self.metric_map = metric_map
         self.bin_to_coords = bin_to_coords
+        self.x_bin_range = x_bin_range
+        self.y_bin_range = y_bin_range
         self.metric = metric
         self.agg = agg
         self.bin_size = bin_size
         self.extra_map_kwargs = extra_map_kwargs
 
-    def plot(self, interactive=False, **kwargs):
-        title = f"{self.agg}({self.metric}) in {self.bin_size} bins"
-        if not interactive:
-            plot_metrics_map(metrics_map=self.metric_map.T)
-        else:
-            MapViewer(self, title=title, **self.extra_map_kwargs, **kwargs).plot()
+    @property
+    def plot_title(self):
+        return f"{self.agg}({self.metric}) in {self.bin_size} bins"
+
+    def get_bin_contents(self, x, y, ascending=True):
+        if (x, y) not in self.bin_to_coords.groups:
+            return
+        return self.bin_to_coords.get_group((x, y)).set_index(["x", "y"])[self.metric].sort_values(ascending=ascending)
+
+    def _plot_map(self, ax, title=None, origin="lower", aspect="auto", cmap=None, pad=False, fontsize=11,
+                  x_ticks=15, y_ticks=15, **kwargs):
+        if cmap is None:
+            colors = ((0.0, 0.6, 0.0), (.66, 1, 0), (0.9, 0.0, 0.0))
+            cmap = mcolors.LinearSegmentedColormap.from_list("cmap", colors)
+
+        img = ax.imshow(self.metric_map.T, origin=origin, aspect=aspect, cmap=cmap, **kwargs)
+
+        if pad:
+            ax.use_sticky_edges = False
+            ax.margins(x=0.01, y=0.01)
+
+        if title is not None:
+            ax.set_title(title, fontsize=fontsize)
+
+        cbar = ax.figure.colorbar(img, extend="both", ax=ax)
+        cbar.ax.tick_params(labelsize=fontsize)
+
+        x_shape, y_shape = self.metric_map.shape
+        x_ticks = min(x_ticks, x_shape)
+        y_ticks = min(y_ticks, y_shape)
+        set_ticks(ax=ax, img_shape=[x_shape, y_shape], ticks_range_x=self.x_bin_range, ticks_range_y=self.y_bin_range,
+                  x_ticks=x_ticks, y_ticks=y_ticks, fontsize=fontsize)  
+
+    def plot(self, figsize=(10, 7), save_to=None, dpi=300, **kwargs):
+        fig, ax = plt.subplots(figsize=figsize)
+        self._plot_map(fig, ax, title=self.plot_title, **kwargs)
+        if save_to is not None:
+            plt.savefig(save_to, dpi=dpi, bbox_inches="tight", pad_inches=0.1)
+        plt.show()
+
+    def plot_interactive(self, map_size=(4, 4), aux_size=(4, 4)):
+        MapViewer(self._plot_map, self.extra_map_kwargs["on_click_handler"], self.get_bin_contents,
+                  title=self.plot_title).plot()
 
 
 class MapViewer:
-    def __init__(self, metric_map, on_click_handler, title, is_lower_better=True, map_size=(4, 4), aux_size=(4, 4)):
-        self.metric_map = metric_map
-        self.on_click_handler = on_click_handler
+    def __init__(self, map_plotter, aux_plotter, bin_getter, map_size=(4, 4), aux_size=(4, 4), title=None,
+                 is_lower_better=True):
+        from ipywidgets import widgets
+        self.map_plotter = map_plotter
+        self.aux_plotter = aux_plotter
+        self.bin_getter = bin_getter
         self.is_desc = is_lower_better
 
         # Current map state
@@ -263,12 +309,11 @@ class MapViewer:
         return "sort-amount-desc" if self.is_desc else "sort-amount-asc"
 
     def gen_drop_options(self, coords):
-        return [f"({x}, {y}) - {metric:.05f}" for x, y, metric in coords.itertuples(index=False)]
+        return [f"({x}, {y}) - {metric:.05f}" for (x, y), metric in coords.iteritems()]
 
     def redraw_aux(self):
-        curr_x, curr_y = self.curr_coords.iloc[self.curr_ix][["x", "y"]]
         self.aux_ax.clear()
-        self.on_click_handler(curr_x, curr_y, self.aux_ax)
+        self.aux_plotter(*self.curr_coords.index[self.curr_ix], self.aux_ax)
 
     def update_drop(self, ix, coords=None):
         self.drop.unobserve(self.select_coords, names="value")
@@ -306,16 +351,15 @@ class MapViewer:
         self.update_state(self.drop.index)
 
     def process_click(self, *click_coords):
+        coords = self.bin_getter(*click_coords, ascending=not self.is_desc)
+
         # Handle clicks on an empty area
-        if click_coords not in self.metric_map.bin_to_coords.groups:
+        if coords is None:
             return
 
         if self.click_point is not None:
             self.click_point.remove()
         self.click_point = self.map_ax.scatter(*click_coords, color="black", marker="+")
-
-        coords = self.metric_map.bin_to_coords.get_group(click_coords)
-        coords = coords.sort_values(self.metric_map.metric, ascending=not self.is_desc)
         self.update_state(0, coords)
 
     def map_on_click(self, event):
@@ -325,14 +369,13 @@ class MapViewer:
         self.process_click(int(event.xdata + 0.5), int(event.ydata + 0.5))
 
     def plot(self):
+        from IPython.display import display
         display(self.figure_box)
 
         # Plot metric map
-        colors = ((0.0, 0.6, 0.0), (.66, 1, 0), (0.9, 0.0, 0.0))
-        cmap = mcolors.LinearSegmentedColormap.from_list("cmap", colors)
-        self.map_ax.imshow(self.metric_map.metric_map.T, origin="lower", cmap=cmap, aspect="auto", interpolation="None")
+        self.map_plotter(self.map_ax)
 
         # Init aux plot with the worst metric value
-        func = np.nanargmax if self.is_desc else np.nanargmin
-        init_x, init_y = np.unravel_index(func(self.metric_map.metric_map), self.metric_map.metric_map.shape)
-        self.process_click(init_x, init_y)
+        # func = np.nanargmax if self.is_desc else np.nanargmin
+        # init_x, init_y = np.unravel_index(func(self.metric_map.metric_map), self.metric_map.metric_map.shape)
+        self.process_click(0, 0)
