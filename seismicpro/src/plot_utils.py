@@ -90,8 +90,9 @@ def scatter_within(ax, points, c, s, **kwargs):
     if is_1d_array(points):
         points = (points, )
     c, s = [to_list(obj, len(points)) for obj in [c, s]]
-    for ix_pts, ix_c, ix_s in zip(points, c, s):
-        ax.scatter(range(len(ix_pts)), ix_pts, c=ix_c, s=ix_s, **kwargs)
+    labels = ['1D picks', '2D picks']
+    for ix_pts, ix_c, ix_s, il in zip(points, c, s, labels):
+        ax.scatter(range(len(ix_pts)), ix_pts, c=ix_c, s=ix_s, **kwargs, label=il)
 
 def seismic_plot(arrs, xlim=None, ylim=None, wiggle=False, std=1, # pylint: disable=too-many-branches, too-many-arguments
                  event=None, s=None, c=None, attribute=None,  
@@ -224,7 +225,7 @@ def seismic_plot(arrs, xlim=None, ylim=None, wiggle=False, std=1, # pylint: disa
     if save_to is not None:
         plt.savefig(save_to, dpi=dpi, bbox_inches='tight')
 
-    plt.show()
+    #plt.show()
 
 def spectrum_plot(arrs, frame, rate, max_freq=None, names=None,
                   figsize=None, save_to=None, dpi=None, **kwargs):
@@ -578,8 +579,11 @@ def plot_metrics_map(metrics_map, cmap=None, title=None, figsize=(10, 7), # pyli
 
     origin = kwargs.pop('origin', 'lower')
     aspect = kwargs.pop('aspect', 'auto')
-    fig, ax = plt.subplots(figsize=figsize)
+    fig = kwargs.pop('fig', None)
+    ax = kwargs.pop('ax', None)
+    if ax is None: fig, ax = plt.subplots(figsize=figsize)
     ticks, labels, cbsize = kwargs.pop('ticks', None), kwargs.pop('labels', None), kwargs.pop('cbsize', 15)
+    locator, formatter = kwargs.pop('locator', None), kwargs.pop('formatter', None)
     img = ax.imshow(metrics_map, origin=origin, cmap=cmap,
                      aspect=aspect, **kwargs)
     
@@ -589,9 +593,8 @@ def plot_metrics_map(metrics_map, cmap=None, title=None, figsize=(10, 7), # pyli
 
     ax.set_title(title, fontsize=fontsize)
     cbar = fig.colorbar(img, extend='both', ax=ax)
-    from matplotlib.ticker import PercentFormatter, MultipleLocator
-    cbar.ax.yaxis.set_major_formatter(PercentFormatter(1, 0))
-    cbar.ax.yaxis.set_major_locator(MultipleLocator()) 
+    if formatter: cbar.ax.yaxis.set_major_formatter(formatter)
+    if locator: cbar.ax.yaxis.set_major_locator(locator)
     cbar.ax.tick_params(labelsize=cbsize)
 
     _set_ticks(ax=ax, img_shape=metrics_map.T.shape, ticks_range_x=ticks_range_x,
@@ -612,7 +615,7 @@ def plot_metrics_map(metrics_map, cmap=None, title=None, figsize=(10, 7), # pyli
 
     if save_to:
         plt.savefig(save_to, dpi=dpi, bbox_inches='tight', pad_inches=0.1)
-    plt.show()
+#    plt.show()
 
 def _set_ticks(ax, img_shape, ticks_range_x=None, ticks_range_y=None, x_ticks=15,
                y_ticks=15, fontsize=None):

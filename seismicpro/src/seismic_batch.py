@@ -682,11 +682,11 @@ class SeismicBatch(Batch):
         self.meta[dst]['crop_coords'] = {}
         self.meta[dst]['crops_source'] = src
 
-        self.__crop(src, coords, shape, pad_zeros, dst)
+        self.__crop(src=src, dst=dst,coords=coords, shape=shape, pad_zeros=pad_zeros)
         return self
 
-    @inbatch_parallel(init='indices')
-    def __crop(self, index, src, coords, shape, pad_zeros, dst=None):
+    @inbatch_parallel(init='indices', target='f')
+    def __crop(self, *index, src, dst,coords, shape, pad_zeros):
         """ Generate crops from an array with seismic data
         see :meth:`~SeismicBatch.crop` for full description
         """
@@ -1435,8 +1435,9 @@ class SeismicBatch(Batch):
         self.update_component(dst, np.array(dst_data + [None])[:-1]) # array implicitly converted to object dtype
         return self
 
-    @inbatch_parallel(init='_init_component', target="threads")
-    def shift_pick_phase(self, index, src, src_traces, dst=None, shift=1.5, threshold=0.05):
+    @action
+    @inbatch_parallel(init='_init_component', target="f")
+    def shift_pick_phase(self, *index, src, src_traces, dst=None, shift=1.5, threshold=0.05):
         """ Shifts picking time stored in `src` component on the given phase along the traces stored in `src_traces`.
 
         Parameters

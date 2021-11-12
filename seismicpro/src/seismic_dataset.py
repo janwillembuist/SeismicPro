@@ -119,8 +119,8 @@ class SeismicDataset(Dataset):
         ----
         Dictoinary with estimated percentile can be obtained from pipeline using `D(container_name)`.
         """
-        if not isinstance(self.index, FieldIndex):
-            raise ValueError("Index must be FieldIndex, not {}".format(type(self.index)))
+        # if not isinstance(self.index, FieldIndex):
+        #     raise ValueError("Index must be FieldIndex, not {}".format(type(self.index)))
 
         private_name = '_' + container_name
         params = getattr(self, private_name, None)
