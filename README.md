@@ -6,7 +6,7 @@
   <a href="">Docs</a> •
   <a href="#installation">Installation</a> •
   <a href="#getting-started">Getting Started</a> •
-  <a href="tutorials">Tutorials</a> •
+  <a href="#tutorials">Tutorials</a> •
   <a href="#citing-seismicpro">Citation</a>
 </p>
 
@@ -122,7 +122,8 @@ stacking_pipeline = (dataset
 stacking_pipeline.run(BATCH_SIZE, n_epochs=1)
 ```
 
-You can get more familiar with the framework and its functionality by reading [SeismicPro tutorials](tutorials).
+## Tutorials
+You can get more familiar with the framework and its functionality by reading [SeismicPro tutorials](https://github.com/gazprom-neft/SeismicPro/tree/tutorials/tutorials).
 
 ## Citing SeismicPro
 
